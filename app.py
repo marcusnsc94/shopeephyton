@@ -21,6 +21,13 @@ def parse_duration(time_str):
         pass
     return "0h00", 0.0
 
+def parse_eta_to_datetime(eta_str, ano_atual):
+    try:
+        if not eta_str or eta_str == '-': return None
+        return datetime.strptime(f"{eta_str}/{ano_atual}", "%d/%m %H:%M/%Y")
+    except:
+        return None
+
 def process_data(text):
     blocks = re.split(r'\n(?=LT[0-9A-Z]+\b)', text.strip())
     parsed_data = []
@@ -38,7 +45,8 @@ def process_data(text):
             "SLA": "", "ETA": "", "Velocidade": 0, "Distancia_Raw": 0,
             "Distancia_Corrigida": 0, "Fator_Correcao": "",
             "Status_Movimento": "", "Tempo_Str": "", "Tempo_Horas": 0.0,
-            "Motivo_Parada": "", "Timestamp_Str": "", "Sem_Sinal": False
+            "Motivo_Parada": "", "Timestamp_Str": "", "Sem_Sinal": False,
+            "Risco_Atraso": False, "Motivo_Risco": ""
         }
         
         lines = [line.strip() for line in block.split('\n') if line.strip()]
@@ -104,6 +112,7 @@ def process_data(text):
                 if i >= 2 and re.match(date_pattern, lines[i-2]):
                     data["SLA"] = lines[i-2]
 
+        # Correção de distância (+30% para MA, +25% para os demais)
         if "MA" in data["Destino"]:
             data["Distancia_Corrigida"] = data["Distancia_Raw"] * 1.30
             data["Fator_Correcao"] = "(MA)"
@@ -111,6 +120,33 @@ def process_data(text):
             data["Distancia_Corrigida"] = data["Distancia_Raw"] * 1.25
             data["Fator_Correcao"] = ""
             
+        # --- MOTOR DE CÁLCULO DE TENDÊNCIA DE ATRASO (RIGOROSO) ---
+        eta_dt = parse_eta_to_datetime(data["ETA"], ano_atual)
+        if eta_dt and data["Distancia_Raw"] > 0:
+            # Velocidade efetiva estimada (se estiver parado ou muito lento, assumimos 50 km/h para cálculo de projeção se estiver em rota, senão usa a atual)
+            vel_calculo = data["Velocidade"] if data["Velocidade"] > 10 else 50
+            horas_necessarias = data["Distancia_Corrigida"] / vel_calculo
+            eta_calculado = agora_br + timedelta(hours=horas_necessarias)
+            
+            # Margem em minutos entre o que o sistema preve e o ETA oficial
+            margem_minutos = (eta_dt - eta_calculado).total_seconds() / 60
+            
+            # Critérios inteligentes e rígidos de tendência de atraso:
+            # 1. Se a margem de folga for inferior a 30 minutos (chega raspando ou atrasa)
+            if margem_minutos < 30:
+                data["Risco_Atraso"] = True
+                data["Motivo_Risco"] = f"Margem de ETA muito justa ({int(margem_minutos)} min de folga estimada)."
+            
+            # 2. Distância longa (> 600 km) com folga inferior a 2 horas (120 min) -> Risco alto de estouro por paragens obrigatórias
+            elif data["Distancia_Raw"] > 600 and margem_minutos < 120:
+                data["Risco_Atraso"] = True
+                data["Motivo_Risco"] = f"Distância longa ({data['Distancia_Raw']} km) com margem reduzida ({int(margem_minutos/60)}h), sujeito a paragens de percurso."
+            
+            # 3. Veículo parado há muito tempo com impacto no ETA
+            elif data["Status_Movimento"] == "Parado" and data["Tempo_Horas"] > 2.0 and margem_minutos < 180:
+                data["Risco_Atraso"] = True
+                data["Motivo_Risco"] = f"Parado há {data['Tempo_Str']} com risco de comprometer o ETA."
+
         parsed_data.append(data)
         
     return pd.DataFrame(parsed_data)
@@ -131,7 +167,7 @@ def generate_report_text(df):
     report += "🚨 **DELAY / ATRASO**\n"
     if criticos.empty:
         report += "Neste recorte, nenhuma LT está matematicamente em DELAY pelo ETA.\n"
-        report += "Os ETAs mais próximos ainda têm margem suficiente, mas há algumas situações que exigem cobrança preventiva.\n\n"
+        report += "Os ETAs más próximos ainda têm margem suficiente, mas há algumas situações que exigem cobrança preventiva.\n\n"
     else:
         for _, row in criticos.iterrows():
             report += f"⚠️ **{row['LT_Short']} — {row['Motorista']}**\n"
@@ -144,41 +180,35 @@ def generate_report_text(df):
 
     report += "⚠️ **TENDÊNCIA / RISCO OPERACIONAL**\n"
     
-    riscos = df[
-        (df["Tempo_Horas"] > 1.5) | 
-        (df["Sem_Sinal"] == True) | 
-        ((df["Velocidade"] < 40) & (df["Status_Movimento"] == "Em trânsito")) |
-        (df["Motivo_Parada"].str.contains("Retenção|Manutenção|Acidente", na=False))
-    ].copy()
+    riscos = df[df["Risco_Atraso"] == True].copy()
     
     if not criticos.empty:
         riscos = riscos[~riscos['LT_Full'].isin(criticos['LT_Full'])]
         
-    count_risco = 1
-    for _, row in riscos.iterrows():
-        report += f"{count_risco}. **{row['LT_Short']} — {row['Motorista']}**\n"
-        report += f"{row['Pacotes']:,} pacotes\n"
-        report += f"ETA {row['ETA']}\n"
-        report += f"{row['Distancia_Raw']} km → {row['Distancia_Corrigida']:.1f} km corrigidos {row['Fator_Correcao']}\n"
-        report += f"{row['Velocidade']} km/h\n"
-        
-        if row['Status_Movimento'] == 'Parado':
-            report += f"Parado há {row['Tempo_Str']}\n"
-        else:
-            if row['Sem_Sinal']:
-                report += f"Está há mais de {row['Tempo_Str']} em trânsito.\n"
-                
-        if row['Motivo_Parada']: report += f"{row['Motivo_Parada']}\n"
-        if row['Sem_Sinal']: 
-            report += f"Última posição informada: {row['Timestamp_Str']}, portanto o timestamp merece atenção.\n"
-        
-        report += "Ação: "
-        if row['Sem_Sinal']: report += "verificar posicionamento/comunicação imediatamente.\n\n"
-        elif "Retenção" in row['Motivo_Parada']: report += "acompanhar liberação e retomada.\n\n"
-        elif "Manutenção" in row['Motivo_Parada']: report += "cobrar previsão de liberação se continuar parado.\n\n"
-        elif row['Status_Movimento'] == 'Parado': report += "confirmar se a parada é operacionalmente válida e cobrar retomada.\n\n"
-        else: report += "acompanhar retomada e velocidade.\n\n"
-        count_risco += 1
+    if riscos.empty:
+        report += "Nenhuma LT apresenta tendência de atraso com base na análise dinâmica de distância, velocidade e margem de ETA.\n\n"
+    else:
+        count_risco = 1
+        for _, row in riscos.iterrows():
+            report += f"{count_risco}. **{row['LT_Short']} — {row['Motorista']}**\n"
+            report += f"{row['Pacotes']:,} pacotes\n"
+            report += f"ETA {row['ETA']}\n"
+            report += f"{row['Distancia_Raw']} km → {row['Distancia_Corrigida']:.1f} km corrigidos {row['Fator_Correcao']}\n"
+            report += f"{row['Velocidade']} km/h\n"
+            
+            if row['Status_Movimento'] == 'Parado':
+                report += f"Parado há {row['Tempo_Str']}\n"
+            
+            if row['Motivo_Parada']: report += f"{row['Motivo_Parada']}\n"
+            report += f"Análise de Risco: {row['Motivo_Risco']}\n"
+            
+            report += "Ação: "
+            if row['Sem_Sinal']: report += "verificar posicionamento/comunicação imediatamente.\n\n"
+            elif "Retenção" in row['Motivo_Parada']: report += "acompanhar liberação e retomada.\n\n"
+            elif "Manutenção" in row['Motivo_Parada']: report += "cobrar previsão de liberação se continuar parado.\n\n"
+            elif row['Status_Movimento'] == 'Parado': report += "confirmar se a parada é operacionalmente válida e cobrar retomada.\n\n"
+            else: report += "acompanhar retomada e velocidade para evitar estouro de ETA.\n\n"
+            count_risco += 1
 
     report += "🚨 **VEÍCULOS PARADOS — RISCO OPERACIONAL**\n"
     parados = df[(df["Status_Movimento"] == "Parado") & (df["Tempo_Horas"] >= 1.0)].copy()
@@ -221,7 +251,7 @@ def generate_report_text(df):
     report += "🟢 **Sem necessidade de ação imediata**\n"
     report += "As demais LTs apresentam margem de ETA compatível com a distância restante e/ou estão em velocidade suficiente no momento.\n\n"
 
-    # --- RESUMO SIMPLIFICADO (CORRIGIDO) ---
+    # --- RESUMO SIMPLIFICADO ---
     report += "**RESUMO SIMPLIFICADO**\n"
     
     report += "Delay:\n"

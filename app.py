@@ -210,7 +210,6 @@ def process_data_local(text, data_trabalho_str):
 
         data["ETA_Dt"] = parse_eta_to_datetime(data["ETA"], ano_atual)
 
-        # Regra de Distância Corrigida (+30% MA, EXCETO SOC-PE2/SOC-PE4 que são PE portanto +25%)
         dest_upper = str(data["Destino"]).upper()
         if "MA" in dest_upper and "SOC-PE" not in dest_upper:
             data["Distancia_Corrigida"] = data["Distancia_Raw"] * 1.30
@@ -277,7 +276,6 @@ def generate_report_text(df):
     report += "> **Correção importante:** neste recorte, as rotas para **SOC-PE2/SOC-PE4** são tratadas como rotas de PE, portanto a correção é **+25%**, não +30%.\n\n"
     report += "---\n\n"
     
-    # DELAY / ATRASO
     report += "# 🚨 DELAY / ATRASO\n\n"
     criticos = df[(df["Status_Operacional"] == "Delay") & (~df["Sem_Sinal"])].copy()
     if criticos.empty:
@@ -296,7 +294,6 @@ def generate_report_text(df):
             report += f"* {row['Motivo_Risco']}\n\n"
             report += "**Ação:** Cobrança imediata da situação e acompanhamento.\n\n"
 
-    # TENDÊNCIA DE ATRASO
     report += "# ⚠️ TENDÊNCIA DE ATRASO / RISCO OPERACIONAL\n\n"
     riscos = df[(df["Status_Operacional"] == "Tendência") & (~df["Sem_Sinal"])].copy()
     if riscos.empty:
@@ -314,7 +311,6 @@ def generate_report_text(df):
                 report += f"* **Evidência:** {row['Motivo_Risco']}\n\n"
             report += "**Ação:** Monitorar e acompanhar recuperação de velocidade.\n\n"
 
-    # SEM SINAL
     report += "# 🚨 SEM SINAL\n\n"
     sem_sinal_df = df[df["Sem_Sinal"] == True].copy()
     if sem_sinal_df.empty:
@@ -327,7 +323,6 @@ def generate_report_text(df):
             report += f"* Última posição: {row['Ultima_Atualizacao_Str']}\n\n"
             report += "**Ação:** Escalar imediatamente para localização/comunicação.\n\n"
 
-    # VEÍCULOS PARADOS
     report += "# 🚨 VEÍCULOS PARADOS — RISCO OPERACIONAL\n\n"
     parados_df = df[df["Status_Movimento"] == "Parado"].sort_values(by="Tempo_Horas", ascending=False)
     if parados_df.empty:
@@ -339,7 +334,6 @@ def generate_report_text(df):
             report += f"| **{row['LT_Short']}** | {row['Pacotes']:,} | {row['Tempo_Str']} | {row['Status_Operacional']} - {row['Motivo_Parada'] or 'Parado'} |\n"
         report += "\n---\n\n"
 
-    # TOP 5 VOLUMES
     report += "# 📦 TOP 5 — MAIOR VOLUME DE PACOTES\n\n"
     top5 = df.sort_values(by="Pacotes", ascending=False).head(5)
     report += "|  # | LT        | Motorista                    |    Pacotes | Situação |\n"
@@ -349,18 +343,12 @@ def generate_report_text(df):
         report += f"| {medal} | **{row['LT_Short']}** | {row['Motorista']} | **{row['Pacotes']:,}** | {row['Status_Operacional']} |\n"
     report += "\n---\n\n"
 
-    # PLANO DE AÇÃO IMEDIATO
     report += "# 🎯 PLANO DE AÇÃO IMEDIATO\n\n"
-    report += "### 🔴 COBRAR AGORA\n"
-    report += "Acionar imediatamente os veículos em Delay e sem sinal.\n\n"
-    report += "### 🟠 MONITORAR PRÓXIMOS 30 MIN\n"
-    report += "Acompanhar os veículos em tendência de atraso e parados.\n\n"
-    report += "### 🟡 ESCALAR SE NÃO HOUVER EVOLUÇÃO\n"
-    report += "Escalonar criticidades persistentes.\n\n"
-    report += "### 🟢 SEM NECESSIDADE DE AÇÃO IMEDIATA\n"
-    report += "Demais LTs com margem compatível.\n\n"
+    report += "### 🔴 COBRAR AGORA\nAcionar imediatamente os veículos em Delay e sem sinal.\n\n"
+    report += "### 🟠 MONITORAR PRÓXIMOS 30 MIN\nAcompanhar os veículos em tendência de atraso e parados.\n\n"
+    report += "### 🟡 ESCALAR SE NÃO HOUVER EVOLUÇÃO\nEscalonar criticidades persistentes.\n\n"
+    report += "### 🟢 SEM NECESSIDADE DE AÇÃO IMEDIATA\nDemais LTs com margem compatível.\n\n"
 
-    # RESUMO SIMPLIFICADO
     report += "# RESUMO SIMPLIFICADO\n\n"
     report += "```text\n"
     report += "Delay:\n"
@@ -454,27 +442,46 @@ if st.session_state["relatorio_gerado"]:
 
     with tab_performance:
         st.markdown("#### 🌐 Performance por Rota (UF) e Distribuição de Status")
+        st.info("ℹ️ Esta aba aplica o filtro de ETA correspondente à janela do Time D (janela de 20 horas a partir da data do plantão informada).")
+        
+        # --- APLICAÇÃO EXCLUSIVA DO FILTRO DE ETA DO TIME D NESTA ABA ---
+        try:
+            dt_inicio_plantao = datetime.strptime(data_plantao_str, "%d/%m/%Y")
+            dt_fim_plantao = dt_inicio_plantao + timedelta(hours=20)
+            
+            df_perf = df[
+                df["ETA_Dt"].notnull() & 
+                (df["ETA_Dt"] >= dt_inicio_plantao) & 
+                (df["ETA_Dt"] <= dt_fim_plantao)
+            ].copy()
+        except:
+            df_perf = df.copy()
         
         col_p1, col_p2 = st.columns(2)
         with col_p1:
-            st.markdown("##### Volume e LTs por UF")
-            ufs_disponiveis = df["UF"].unique()
-            for uf in sorted(ufs_disponiveis):
-                df_uf = df[df["UF"] == uf]
-                st.markdown(f"* **{uf}**: {len(df_uf)} LTs | **{df_uf['Pacotes'].sum():,}** pacotes")
+            st.markdown("##### Volume e LTs por UF (Time D)")
+            if not df_perf.empty:
+                ufs_disponiveis = df_perf["UF"].unique()
+                for uf in sorted(ufs_disponiveis):
+                    df_uf = df_perf[df_perf["UF"] == uf]
+                    st.markdown(f"* **{uf}**: {len(df_uf)} LTs | **{df_uf['Pacotes'].sum():,}** pacotes")
+            else:
+                st.warning("Nenhuma LT encontrada dentro do range de ETA do Time D para este recorte.")
                 
         with col_p2:
-            # Gráfico de Pizza restaurado
-            fig_status = px.pie(
-                df, 
-                names="Status_Operacional", 
-                title="Proporção de Status Operacional",
-                color="Status_Operacional",
-                color_discrete_map={"Normal": "#10b981", "Tendência": "#f59e0b", "Delay": "#dc2626"},
-                hole=0.4
-            )
-            fig_status.update_layout(margin=dict(t=30, b=10, l=10, r=10), height=280)
-            st.plotly_chart(fig_status, use_container_width=True)
+            if not df_perf.empty:
+                fig_status = px.pie(
+                    df_perf, 
+                    names="Status_Operacional", 
+                    title="Proporção de Status Operacional (Time D)",
+                    color="Status_Operacional",
+                    color_discrete_map={"Normal": "#10b981", "Tendência": "#f59e0b", "Delay": "#dc2626"},
+                    hole=0.4
+                )
+                fig_status.update_layout(margin=dict(t=30, b=10, l=10, r=10), height=280)
+                st.plotly_chart(fig_status, use_container_width=True)
+            else:
+                st.info("Sem dados para exibir o gráfico.")
 
     with tab_parados:
         st.markdown("#### 🛑 Veículos Parados")

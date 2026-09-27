@@ -5,10 +5,53 @@ from datetime import datetime, timedelta
 
 st.set_page_config(page_title="Gerador de Relatórios - Torre de Controle", layout="wide")
 
+# --- ESTILIZAÇÃO CSS (Botão Laranja Shopee) ---
+st.markdown(
+    """
+    <style>
+    div.stButton > button {
+        background-color: #ee4d2d !important;
+        color: white !important;
+        font-weight: bold !important;
+        border: none !important;
+        border-radius: 6px !important;
+        width: 100%;
+        padding: 0.6rem 1rem;
+        font-size: 16px;
+    }
+    div.stButton > button:hover {
+        background-color: #d73a1d !important;
+        color: white !important;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True
+)
+
 st.title("🚛 Gerador de Relatórios Automatizado - Shopee")
-st.markdown("Cole os dados do Losung Web para gerar o texto do relatório operacional.")
+st.markdown("Cole os dados do Losung Web e clique no botão para gerar o relatório operacional.")
+
+# Inicializar estado da sessão para manter o relatório visível
+if "relatorio_gerado" not in st.session_state:
+    st.session_state["relatorio_gerado"] = ""
+if "df_parsed" not in st.session_state:
+    st.session_state["df_parsed"] = None
 
 raw_text = st.text_area("Cole os dados do Dashboard aqui:", height=150)
+
+# Botão Laranja para acionar a geração
+if st.button("Gerar relatório agora!"):
+    if raw_text.strip():
+        df_parsed = process_data_local(raw_text)
+        if df_parsed.empty:
+            st.error("Nenhum dado válido encontrado. Verifique se copiou corretamente.")
+            st.session_state["relatorio_gerado"] = ""
+            st.session_state["df_parsed"] = None
+        else:
+            st.session_state["relatorio_gerado"] = generate_report_text(df_parsed)
+            st.session_state["df_parsed"] = df_parsed
+    else:
+        st.warning("Por favor, cole os dados do dashboard na caixa de texto acima antes de gerar o relatório.")
 
 def parse_duration(time_str):
     try:
@@ -28,7 +71,7 @@ def parse_eta_to_datetime(eta_str, ano_atual):
     except:
         return None
 
-def process_data(text):
+def process_data_local(text):
     blocks = re.split(r'\n(?=LT[0-9A-Z]+\b)', text.strip())
     parsed_data = []
     
@@ -129,18 +172,12 @@ def process_data(text):
             
             margem_minutos = (eta_dt - eta_calculado).total_seconds() / 60
             
-            # Critérios inteligentes e rígidos:
-            # 1. Margem de folga inferior a 30 min (ou cerca de 10 min)
             if margem_minutos < 30:
                 data["Risco_Atraso"] = True
                 data["Motivo_Risco"] = f"Margem de ETA muito justa ({int(margem_minutos)} min de folga estimada)."
-            
-            # 2. Distância longa (> 600 km) com folga inferior a 2 horas (120 min)
             elif data["Distancia_Raw"] > 600 and margem_minutos < 120:
                 data["Risco_Atraso"] = True
                 data["Motivo_Risco"] = f"Distância longa ({data['Distancia_Raw']} km) com margem reduzida ({int(margem_minutos/60)}h), sujeito a paragens de percurso."
-            
-            # 3. Veículo parado há muito tempo com impacto no ETA
             elif data["Status_Movimento"] == "Parado" and data["Tempo_Horas"] > 2.0 and margem_minutos < 180:
                 data["Risco_Atraso"] = True
                 data["Motivo_Risco"] = f"Parado há {data['Tempo_Str']} com risco de comprometer o ETA."
@@ -281,15 +318,10 @@ def generate_report_text(df):
     
     return report
 
-if raw_text:
-    df_parsed = process_data(raw_text)
+# Exibir resultado guardado no session_state se existir
+if st.session_state["relatorio_gerado"]:
+    st.success("Dados lidos com sucesso! Relatório gerado abaixo.")
+    st.text_area("Copie o texto abaixo (Ctrl+A e Ctrl+C):", value=st.session_state["relatorio_gerado"], height=600)
     
-    if df_parsed.empty:
-        st.error("Nenhum dado válido. Verifique se copiou corretamente.")
-    else:
-        st.success("Dados lidos com sucesso! Relatório gerado abaixo.")
-        relatorio_final = generate_report_text(df_parsed)
-        st.text_area("Copie o texto abaixo (Ctrl+A e Ctrl+C):", value=relatorio_final, height=600)
-        
-        with st.expander("Ver base de dados extraída (Para conferência)"):
-            st.dataframe(df_parsed)
+    with st.expander("Ver base de dados extraída (Para conferência)"):
+        st.dataframe(st.session_state["df_parsed"])

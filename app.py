@@ -107,13 +107,22 @@ def extract_uf(destino):
             return uf
     return "OUTROS"
 
-def process_data_local(text):
+def process_data_local(text, data_trabalho_str):
     blocks = re.split(r'\n(?=LT[0-9A-Z]+\b)', text.strip())
     parsed_data = []
     
     agora_br = datetime.utcnow() - timedelta(hours=3)
     ano_atual = agora_br.year
     
+    # Definir o range do turno com base na data informada (Escala 12x36: 19:00 do dia até 15:00 do dia seguinte)
+    try:
+        dt_base = datetime.strptime(data_trabalho_str, "%Y-%m-%d")
+        inicio_turno = dt_base.replace(hour=19, minute=0, second=0)
+        fim_turno = inicio_turno + timedelta(hours=20) # Até às 15:00 do dia seguinte (19h + 20h = 15h do dia +1)
+    except:
+        inicio_turno = agora_br.replace(hour=19, minute=0, second=0)
+        fim_turno = inicio_turno + timedelta(hours=20)
+
     for block in blocks:
         if not block.strip().startswith('LT'):
             continue
@@ -210,6 +219,12 @@ def process_data_local(text):
 
         data["ETA_Dt"] = parse_eta_to_datetime(data["ETA"], ano_atual)
 
+        # Filtro opcional por range do turno (opcionalmente aplicado se o ETA estiver dentro da janela do plantão)
+        if data["ETA_Dt"]:
+            if not (inicio_turno <= data["ETA_Dt"] <= fim_turno):
+                # Se estiver fora do range do plantão atual, podemos ignorar ou tratar, mas vamos manter filtrando por segurança da escala
+                pass
+
         if "MA" in data["Destino"] or data["UF"] == "MA":
             data["Distancia_Corrigida"] = data["Distancia_Raw"] * 1.30
             data["Fator_Correcao"] = "(MA)"
@@ -257,14 +272,19 @@ def process_data_local(text):
 
         parsed_data.append(data)
         
-    return pd.DataFrame(parsed_data)
+    df_result = pd.DataFrame(parsed_data)
+    if not df_result.empty and "ETA_Dt" in df_result.columns:
+        # Filtrar estritamente LTs cujo ETA esteja dentro do range do plantão (19h do dia escolhido até 15h do dia seguinte)
+        df_result = df_result[(df_result["ETA_Dt"].isna()) | ((df_result["ETA_Dt"] >= inicio_turno) & (df_result["ETA_Dt"] <= fim_turno))]
+        
+    return df_result
 
 def generate_report_text(df):
     agora = datetime.utcnow() - timedelta(hours=3)
     data_hora_str = agora.strftime("%d/%m/%Y · %H:%M")
     
     report = f"**MONITORAMENTO OPERACIONAL — {data_hora_str}**\n"
-    report += f"Total no recorte: {len(df)} LTs\n\n"
+    report += f"Total no recorte do plantão: {len(df)} LTs\n\n"
     
     criticos = df[df["Status_Operacional"] == "Delay"].copy()
     report += "🚨 **DELAY / ATRASO MATEMÁTICO**\n"
@@ -290,6 +310,11 @@ st.markdown("<h1 style='text-align: center; color: #ee4d2d;'>🚛 Torre de Contr
 st.markdown("<p style='text-align: center; color: #64748b;'>Monitoramento preditivo, comportamental e logístico avançado em tempo real.</p>", unsafe_allow_html=True)
 st.markdown("<br>", unsafe_allow_html=True)
 
+# Seletor da Data de Início do Plantão (Escala 12x36)
+col_s1, col_s2 = st.columns([3, 7])
+with col_s1:
+    data_plantao = st.date_input("Data de Início do Plantão (19:00):", value=datetime.utcnow().date())
+
 if "relatorio_gerado" not in st.session_state:
     st.session_state["relatorio_gerado"] = ""
 if "df_parsed" not in st.session_state:
@@ -304,9 +329,9 @@ with st.container():
 
 if gerar_btn:
     if raw_text.strip():
-        df_parsed = process_data_local(raw_text)
+        df_parsed = process_data_local(raw_text, str(data_plantao))
         if df_parsed.empty:
-            st.error("⚠️ Nenhum dado válido encontrado.")
+            st.error("⚠️ Nenhum dado válido encontrado para este range de plantão.")
             st.session_state["relatorio_gerado"] = ""
             st.session_state["df_parsed"] = None
         else:
@@ -356,8 +381,8 @@ if st.session_state["relatorio_gerado"]:
         st.code(st.session_state["relatorio_gerado"], language="markdown")
 
     with tab_performance:
-        st.markdown("#### 🌐 Performance por Rota (UF) — Turno Operacional")
-        st.info("📅 **Range do Turno (Shift D):** ETA de 19:00 do dia atual até 15:00 do dia seguinte.")
+        st.markdown("#### 🌐 Performance por Rota (UF) — Turno de Escala (12x36)")
+        st.info(f"📅 **Range do Plantão Ativo:** Das 19:00 de {data_plantao.strftime('%d/%m/%Y')} até às 15:00 do dia seguinte.")
         
         ufs_disponiveis = df["UF"].unique()
         

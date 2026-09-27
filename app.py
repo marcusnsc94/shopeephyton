@@ -124,10 +124,19 @@ def process_data_local(text):
         if len(first_line) > 1:
             data["Motorista"] = first_line[1]
             
+        # Extração robusta de pacotes (procura valores numéricos isolados válidos)
         for line in lines:
-            if re.match(r'^\d{3,6}$', line):
-                data["Pacotes"] = int(line)
-                break
+            clean_line = line.replace('.', '').replace(',', '')
+            if clean_line.isdigit():
+                val = int(clean_line)
+                if 10 <= val <= 99999:
+                    data["Pacotes"] = val
+                    break
+        if data["Pacotes"] == 0:
+            # Fallback buscando números de 3 a 6 dígitos em qualquer parte
+            nums = re.findall(r'\b\d{3,6}\b', block)
+            if nums:
+                data["Pacotes"] = int(nums[0])
                 
         vel_match = re.search(r'(\d+)\s*km/h', block)
         if vel_match:
@@ -154,6 +163,12 @@ def process_data_local(text):
                     data["Destino"] = parts[1]
                 break
                 
+        # Fallback de destino se não achou no formato de aba
+        if not data["Destino"]:
+            dest_match = re.search(r'\b(SOC-[A-Z0-9\-]+|HUB-[A-Z0-9\-]+|LM\s+[A-Z0-9\-]+)\b', block)
+            if dest_match:
+                data["Destino"] = dest_match.group(1)
+                
         for line in lines:
             if any(kw in line for kw in ['Parada', 'Retenção', 'Acidente', 'Problema', 'Mudança', 'Manutenção', 'Trânsito']):
                 data["Motivo_Parada"] = line
@@ -172,12 +187,17 @@ def process_data_local(text):
                     data["Sem_Sinal"] = True
             except: pass
 
+        # Extração de ETA e SLA refinada
         for i, line in enumerate(lines):
             if 'No prazo' in line or 'Atrasado' in line or 'Risco' in line:
                 if i >= 1 and (re.match(date_pattern, lines[i-1]) or lines[i-1] != ''):
                     data["ETA"] = lines[i-1]
                 if i >= 2 and re.match(date_pattern, lines[i-2]):
                     data["SLA"] = lines[i-2]
+                    
+        if data["ETA"] == "-" and len(dates_found) >= 1:
+            # Se encontrou datas mas o parsing acima falhou, assume a primeira data válida de ETA posterior
+            data["ETA"] = dates_found[0]
 
         if "MA" in data["Destino"]:
             data["Distancia_Corrigida"] = data["Distancia_Raw"] * 1.30
@@ -408,7 +428,6 @@ if st.session_state["relatorio_gerado"]:
     top_volume_val = df["Pacotes"].max() if not df.empty else 0
 
     # Ordem rigorosa solicitada dos score cards:
-    # 1. Total de LTs | 2. Veículos no prazo | 3. Veículos parados | 4. Veículos com tendência de atraso | 5. LTs com mais pacotes
     k1, k2, k3, k4, k5 = st.columns(5)
     
     with k1:

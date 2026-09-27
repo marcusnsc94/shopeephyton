@@ -182,7 +182,7 @@ def process_data_local(text, data_trabalho_str):
         data["UF"] = extract_uf(data["Destino"])
                 
         for line in lines:
-            if any(kw in line for kw in ['Parada', 'Retenção', 'Acidente', 'Problema', 'Mudança', 'Manutenção', 'Trânsito', 'aderência', 'antecipada', 'documentação']):
+            if any(kw in line for kw in ['Parada', 'Retenção', 'Acidente', 'Problema', 'Mudança', 'Manutenção', 'Trânsito', 'aderência', 'antecipada', 'documentação', 'fiscal']):
                 data["Motivo_Parada"] = line
                 break
                 
@@ -276,6 +276,7 @@ def generate_report_text(df):
     report += "> **Correção importante:** neste recorte, as rotas para **SOC-PE2/SOC-PE4** são tratadas como rotas de PE, portanto a correção é **+25%**, não +30%.\n\n"
     report += "---\n\n"
     
+    # DELAY / ATRASO
     report += "# 🚨 DELAY / ATRASO\n\n"
     criticos = df[(df["Status_Operacional"] == "Delay") & (~df["Sem_Sinal"])].copy()
     if criticos.empty:
@@ -294,6 +295,7 @@ def generate_report_text(df):
             report += f"* {row['Motivo_Risco']}\n\n"
             report += "**Ação:** Cobrança imediata da situação e acompanhamento.\n\n"
 
+    # TENDÊNCIA DE ATRASO
     report += "# ⚠️ TENDÊNCIA DE ATRASO / RISCO OPERACIONAL\n\n"
     riscos = df[(df["Status_Operacional"] == "Tendência") & (~df["Sem_Sinal"])].copy()
     if riscos.empty:
@@ -311,6 +313,7 @@ def generate_report_text(df):
                 report += f"* **Evidência:** {row['Motivo_Risco']}\n\n"
             report += "**Ação:** Monitorar e acompanhar recuperação de velocidade.\n\n"
 
+    # SEM SINAL
     report += "# 🚨 SEM SINAL\n\n"
     sem_sinal_df = df[df["Sem_Sinal"] == True].copy()
     if sem_sinal_df.empty:
@@ -323,6 +326,7 @@ def generate_report_text(df):
             report += f"* Última posição: {row['Ultima_Atualizacao_Str']}\n\n"
             report += "**Ação:** Escalar imediatamente para localização/comunicação.\n\n"
 
+    # VEÍCULOS PARADOS
     report += "# 🚨 VEÍCULOS PARADOS — RISCO OPERACIONAL\n\n"
     parados_df = df[df["Status_Movimento"] == "Parado"].sort_values(by="Tempo_Horas", ascending=False)
     if parados_df.empty:
@@ -334,6 +338,7 @@ def generate_report_text(df):
             report += f"| **{row['LT_Short']}** | {row['Pacotes']:,} | {row['Tempo_Str']} | {row['Status_Operacional']} - {row['Motivo_Parada'] or 'Parado'} |\n"
         report += "\n---\n\n"
 
+    # TOP 5 VOLUMES
     report += "# 📦 TOP 5 — MAIOR VOLUME DE PACOTES\n\n"
     top5 = df.sort_values(by="Pacotes", ascending=False).head(5)
     report += "|  # | LT        | Motorista                    |    Pacotes | Situação |\n"
@@ -343,12 +348,44 @@ def generate_report_text(df):
         report += f"| {medal} | **{row['LT_Short']}** | {row['Motorista']} | **{row['Pacotes']:,}** | {row['Status_Operacional']} |\n"
     report += "\n---\n\n"
 
+    # PLANO DE AÇÃO IMEDIATO (DINÂMICO E RIGOROSO, BASEADO NO PADRÃO EXIGIDO)
     report += "# 🎯 PLANO DE AÇÃO IMEDIATO\n\n"
-    report += "### 🔴 COBRAR AGORA\nAcionar imediatamente os veículos em Delay e sem sinal.\n\n"
-    report += "### 🟠 MONITORAR PRÓXIMOS 30 MIN\nAcompanhar os veículos em tendência de atraso e parados.\n\n"
-    report += "### 🟡 ESCALAR SE NÃO HOUVER EVOLUÇÃO\nEscalonar criticidades persistentes.\n\n"
-    report += "### 🟢 SEM NECESSIDADE DE AÇÃO IMEDIATA\nDemais LTs com margem compatível.\n\n"
+    report += "🔴 **COBRAR AGORA**\n\n"
+    
+    # Filtrar itens críticos para o Cobrar Agora (Delays, Sem Sinal e Riscos com margem <= 30 min ou paradas longas)
+    urgentes = pd.concat([
+        df[df["Status_Operacional"] == "Delay"],
+        df[df["Sem_Sinal"] == True],
+        df[(df["Status_Operacional"] == "Tendência") & ((df["Margem_Minutos"] <= 30) | (df["Tempo_Horas"] >= 2.0))]
+    ]).drop_duplicates(subset=["LT_Full"])
+    
+    if urgentes.empty:
+        report += "Nenhuma unidade em situação crítica iminente neste recorte.\n\n"
+    else:
+        for idx, (_, row) in enumerate(urgentes.iterrows(), 1):
+            motorista_nome = row['Motorista'] if row['Motorista'] and row['Motorista'] != '-' else 'CONDUTOR NÃO IDENTIFICADO'
+            report += f"{idx}. **{row['LT_Full']} — {motorista_nome}**\n"
+            
+            detalhes = []
+            if row['Sem_Sinal']:
+                detalhes.append(f"Sem sinal telemétrico desde {row['Ultima_Atualizacao_Str']}.")
+            if row['Margem_Minutos'] != 999:
+                if row['Margem_Minutos'] < 0:
+                    detalhes.append(f"Já em DELAY matemático (déficit de {abs(row['Margem_Minutos'])} min).")
+                else:
+                    detalhes.append(f"Margem de aproximadamente **{row['Margem_Minutos']} min**.")
+            if row['Velocidade'] > 0:
+                detalhes.append(f"Velocidade atual: {row['Velocidade']} km/h.")
+            if row['Status_Movimento'] == 'Parado':
+                detalhes.append(f"Parado há {row['Tempo_Str']}.")
+            if row['Motivo_Parada']:
+                detalhes.append(f"Ocorrência/Motivo: {row['Motivo_Parada']}.")
+            if row['Pacotes'] > 0:
+                detalhes.append(f"Volume: {row['Pacotes']:,} pacotes.")
+                
+            report += f"{' '.join(detalhes)}\n\n"
 
+    # RESUMO SIMPLIFICADO
     report += "# RESUMO SIMPLIFICADO\n\n"
     report += "```text\n"
     report += "Delay:\n"
@@ -446,7 +483,6 @@ if st.session_state["relatorio_gerado"]:
         st.markdown("#### 🌐 Performance por Rota (UF) — Filtrado pelo Turno D")
         st.info(f"ℹ️ Exibindo apenas as LTs com ETA na data do plantão informada: **{data_plantao_str}**.")
         
-        # --- FILTRO EXCLUSIVO DO TIME D POR DATA ---
         try:
             dt_inicio_plantao = datetime.strptime(data_plantao_str, "%d/%m/%Y").date()
             df_perf = df[
@@ -459,7 +495,6 @@ if st.session_state["relatorio_gerado"]:
         if not df_perf.empty:
             ufs_disponiveis = sorted(df_perf["UF"].unique())
             
-            # Exibir cada UF individualmente com seu próprio gráfico de pizza
             for uf in ufs_disponiveis:
                 df_uf = df_perf[df_perf["UF"] == uf]
                 

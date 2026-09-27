@@ -28,31 +28,7 @@ st.markdown(
     unsafe_allow_html=True
 )
 
-st.title("🚛 Gerador de Relatórios Automatizado - Shopee")
-st.markdown("Cole os dados do Losung Web e clique no botão para gerar o relatório operacional.")
-
-# Inicializar estado da sessão para manter o relatório visível
-if "relatorio_gerado" not in st.session_state:
-    st.session_state["relatorio_gerado"] = ""
-if "df_parsed" not in st.session_state:
-    st.session_state["df_parsed"] = None
-
-raw_text = st.text_area("Cole os dados do Dashboard aqui:", height=150)
-
-# Botão Laranja para acionar a geração
-if st.button("Gerar relatório agora!"):
-    if raw_text.strip():
-        df_parsed = process_data_local(raw_text)
-        if df_parsed.empty:
-            st.error("Nenhum dado válido encontrado. Verifique se copiou corretamente.")
-            st.session_state["relatorio_gerado"] = ""
-            st.session_state["df_parsed"] = None
-        else:
-            st.session_state["relatorio_gerado"] = generate_report_text(df_parsed)
-            st.session_state["df_parsed"] = df_parsed
-    else:
-        st.warning("Por favor, cole os dados do dashboard na caixa de texto acima antes de gerar o relatório.")
-
+# --- FUNÇÕES DE PROCESSAMENTO (Declaradas primeiro) ---
 def parse_duration(time_str):
     try:
         parts = time_str.split(':')
@@ -317,6 +293,31 @@ def generate_report_text(df):
     report += "----------------\n"
     
     return report
+
+# --- INTERFACE DO USUÁRIO (Executada após as funções) ---
+st.title("🚛 Gerador de Relatórios Automatizado - Shopee")
+st.markdown("Cole os dados do Losung Web e clique no botão para gerar o relatório operacional.")
+
+if "relatorio_gerado" not in st.session_state:
+    st.session_state["relatorio_gerado"] = ""
+if "df_parsed" not in st.session_state:
+    st.session_state["df_parsed"] = None
+
+raw_text = st.text_area("Cole os dados do Dashboard aqui:", height=150)
+
+# Botão Laranja para acionar a geração
+if st.button("Gerar relatório agora!"):
+    if raw_text.strip():
+        df_parsed = process_data_local(raw_text)
+        if df_parsed.empty:
+            st.error("Nenhum dado válido encontrado. Verifique se copiou corretamente.")
+            st.session_state["relatorio_gerado"] = ""
+            st.session_state["df_parsed"] = None
+        else:
+            st.session_state["relatorio_gerado"] = generate_report_text(df_parsed)
+            st.session_state["df_parsed"] = df_parsed
+    else:
+        st.warning("Por favor, cole os dados do dashboard na caixa de texto acima antes de gerar o relatório.")
 
 # Exibir resultado guardado no session_state se existir
 if st.session_state["relatorio_gerado"]:

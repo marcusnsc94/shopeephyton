@@ -19,8 +19,6 @@ st.markdown(
     .main {
         background-color: #f4f6f9;
     }
-    
-    /* Cartões de Métricas Modernos */
     .metric-card {
         background: #ffffff;
         border: 1px solid #e2e8f0;
@@ -47,8 +45,6 @@ st.markdown(
         font-weight: 700;
         color: #1e293b;
     }
-
-    /* Botão Principal Shopee */
     div.stButton > button {
         background-color: #ee4d2d !important;
         color: white !important;
@@ -66,7 +62,6 @@ st.markdown(
         box-shadow: 0 6px 15px rgba(238, 77, 45, 0.35);
         color: white !important;
     }
-
     h1, h2, h3 {
         color: #1e293b;
         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
@@ -116,7 +111,7 @@ def process_data_local(text, data_trabalho_str):
     try:
         dt_base = datetime.strptime(data_trabalho_str, "%d/%m/%Y")
         inicio_turno = dt_base.replace(hour=19, minute=0, second=0)
-        fim_turno = inicio_turno + timedelta(hours=20) # 19h de hoje até 15h de amanhã
+        fim_turno = inicio_turno + timedelta(hours=20)
     except:
         inicio_turno = agora_br.replace(hour=19, minute=0, second=0)
         fim_turno = inicio_turno + timedelta(hours=20)
@@ -219,7 +214,9 @@ def process_data_local(text, data_trabalho_str):
 
         data["ETA_Dt"] = parse_eta_to_datetime(data["ETA"], ano_atual)
 
-        if "MA" in data["Destino"] or data["UF"] == "MA":
+        # Regra de Distância Corrigida (+30% MA, EXCETO SOC-PE2/SOC-PE4 que são PE portanto +25%)
+        dest_upper = str(data["Destino"]).upper()
+        if "MA" in dest_upper and "SOC-PE" not in dest_upper:
             data["Distancia_Corrigida"] = data["Distancia_Raw"] * 1.30
             data["Fator_Correcao"] = "(MA)"
         else:
@@ -258,12 +255,6 @@ def process_data_local(text, data_trabalho_str):
                 data["Status_Operacional"] = "Tendência"
                 data["Motivo_Risco"] = f"Sem atualização desde {data['Ultima_Atualizacao_Str']}."
 
-        motivo_lower = data["Motivo_Parada"].lower()
-        if "aderência ao transit time" in motivo_lower or "saída antecipada" in motivo_lower or "early" in motivo_lower:
-            data["Classificacao_Desempenho"] = "Early"
-        elif data["Status_Operacional"] == "Delay" or "atrasado" in motivo_lower:
-            data["Classificacao_Desempenho"] = "Delay"
-
         parsed_data.append(data)
         
     df_result = pd.DataFrame(parsed_data)
@@ -276,47 +267,113 @@ def generate_report_text(df):
     agora = datetime.utcnow() - timedelta(hours=3)
     data_hora_str = agora.strftime("%d/%m/%Y · %H:%M")
     
-    report = f"📊 *MONITORAMENTO OPERACIONAL — TORRE DE CONTROLE*\n"
-    report += f"🕒 Atualização: {data_hora_str}\n"
-    report += f"📦 Total de LTs no recorte do plantão: {len(df)}\n\n"
+    report = f"# MONITORAMENTO OPERACIONAL — {data_hora_str}\n\n"
+    report += f"**Total no recorte:** {len(df)} LTs\n"
+    report += "**Referência:** ETA oficial = primeiro horário.\n"
+    report += "**Velocidade de cálculo:** 60 km/h ≈ 1 km/min.\n"
+    report += "**Distância corrigida:** +25% nas rotas gerais; +30% somente para destinos em MA.\n"
+    report += "**Parada programada — intervalo/refeição:** não contabilizada como causa de atraso.\n\n"
+    report += "> **Correção importante:** neste recorte, as rotas para **SOC-PE2/SOC-PE4** são tratadas como rotas de PE, portanto a correção é **+25%**, não +30%.\n\n"
+    report += "---\n\n"
     
-    criticos = df[df["Status_Operacional"] == "Delay"].copy()
-    report += "🚨 *DELAY / ATRASO MATEMÁTICO*\n"
+    # DELAY / ATRASO
+    report += "# 🚨 DELAY / ATRASO\n\n"
+    criticos = df[(df["Status_Operacional"] == "Delay") & (~df["Sem_Sinal"])].copy()
     if criticos.empty:
-        report += "• Nenhuma LT em delay neste recorte.\n\n"
+        report += "Nenhuma LT em delay neste recorte.\n\n"
     else:
         for _, row in criticos.iterrows():
-            report += f"• *{row['LT_Short']}* | Motorista: {row['Motorista']} | Pcts: {row['Pacotes']:,} | ETA: {row['ETA']} | Destino: {row['Destino']}\n"
-            report += f"  _Ação/Motivo: {row['Motivo_Risco']}_\n\n"
+            report += f"## 🔴 {row['LT_Full']} — {row['Motorista']}\n\n"
+            report += f"* **ETA:** {row['ETA']}\n"
+            report += f"* **Pacotes:** {row['Pacotes']:,}\n"
+            report += f"* **Distância:** {row['Distancia_Raw']} km → **{row['Distancia_Corrigida']:.2f} km corrigidos**\n"
+            report += f"* **Velocidade:** {row['Velocidade']} km/h\n"
+            if row['Status_Movimento'] == 'Parado':
+                report += f"* **Parado:** {row['Tempo_Str']}\n"
+            if row['Motivo_Parada']:
+                report += f"* **Ocorrência:** {row['Motivo_Parada']}\n"
+            report += f"* {row['Motivo_Risco']}\n\n"
+            report += "**Ação:** Cobrança imediata da situação e acompanhamento.\n\n"
 
-    riscos = df[df["Status_Operacional"] == "Tendência"].copy()
-    report += "⚠️ *TENDÊNCIA DE ATRASO / ALERTAS*\n"
+    # TENDÊNCIA DE ATRASO
+    report += "# ⚠️ TENDÊNCIA DE ATRASO / RISCO OPERACIONAL\n\n"
+    riscos = df[(df["Status_Operacional"] == "Tendência") & (~df["Sem_Sinal"])].copy()
     if riscos.empty:
-        report += "• Nenhuma tendência de atraso identificada.\n\n"
+        report += "Nenhuma tendência de atraso identificada.\n\n"
     else:
         for _, row in riscos.iterrows():
-            report += f"• *{row['LT_Short']}* | Motorista: {row['Motorista']} | Pcts: {row['Pacotes']:,} | Margem: {row['Margem_Minutos']} min\n"
-            report += f"  _Evidência: {row['Motivo_Risco']}_\n\n"
+            report += f"## 🟠 {row['LT_Full']} — {row['Motorista']}\n\n"
+            report += f"* **Pacotes:** {row['Pacotes']:,}\n"
+            report += f"* **ETA:** {row['ETA']}\n"
+            report += f"* **Distância:** {row['Distancia_Raw']} km → **{row['Distancia_Corrigida']:.2f} km corrigidos**\n"
+            report += f"* **Velocidade:** {row['Velocidade']} km/h\n"
+            if row['Motivo_Parada']:
+                report += f"* **Ocorrência/Parada:** {row['Motivo_Parada']}\n"
+            if row['Motivo_Risco']:
+                report += f"* **Evidência:** {row['Motivo_Risco']}\n\n"
+            report += "**Ação:** Monitorar e acompanhar recuperação de velocidade.\n\n"
 
-    parados = df[df["Status_Movimento"] == "Parado"].copy()
-    report += "🛑 *VEÍCULOS PARADOS*\n"
-    if parados.empty:
-        report += "• Nenhum veículo parado no momento.\n\n"
+    # SEM SINAL
+    report += "# 🚨 SEM SINAL\n\n"
+    sem_sinal_df = df[df["Sem_Sinal"] == True].copy()
+    if sem_sinal_df.empty:
+        report += "Nenhum veículo sem sinal.\n\n"
     else:
-        for _, row in parados.iterrows():
-            report += f"• *{row['LT_Short']}* | Parado há: {row['Tempo_Str']} | Pcts: {row['Pacotes']:,} | Destino: {row['Destino']}\n"
-            report += f"  _Motivo Parada: {row['Motivo_Parada'] or 'Não informado'}_\n\n"
+        for _, row in sem_sinal_df.iterrows():
+            report += f"### 🔴 {row['LT_Full']} — {row['Motorista']}\n\n"
+            report += f"* ETA {row['ETA']}\n"
+            report += f"* **Sem sinal**\n"
+            report += f"* Última posição: {row['Ultima_Atualizacao_Str']}\n\n"
+            report += "**Ação:** Escalar imediatamente para localização/comunicação.\n\n"
 
-    report += "🌐 *RESUMO POR ROTA (UF)*\n"
-    ufs_disponiveis = df["UF"].unique()
-    for uf in sorted(ufs_disponiveis):
-        df_uf = df[df["UF"] == uf]
-        total_lts_uf = len(df_uf)
-        total_pcts_uf = df_uf["Pacotes"].sum()
-        report += f"• *{uf}*: {total_lts_uf} LTs | {total_pcts_uf:,} pacotes\n"
-    
-    report += "\n----------------------------------------\n"
-    report += "⚡ *Plano de Ação:* Acionar motoristas em tendência de atraso e verificar retenções nos trechos críticos.\n"
+    # VEÍCULOS PARADOS
+    report += "# 🚨 VEÍCULOS PARADOS — RISCO OPERACIONAL\n\n"
+    parados_df = df[df["Status_Movimento"] == "Parado"].sort_values(by="Tempo_Horas", ascending=False)
+    if parados_df.empty:
+        report += "Nenhum veículo parado no momento.\n\n"
+    else:
+        report += "| LT        | Pacotes | Parado | Avaliação |\n"
+        report += "| --------- | ------: | -----: | --------------------------------------- |\n"
+        for _, row in parados_df.iterrows():
+            report += f"| **{row['LT_Short']}** | {row['Pacotes']:,} | {row['Tempo_Str']} | {row['Status_Operacional']} - {row['Motivo_Parada'] or 'Parado'} |\n"
+        report += "\n---\n\n"
+
+    # TOP 5 VOLUMES
+    report += "# 📦 TOP 5 — MAIOR VOLUME DE PACOTES\n\n"
+    top5 = df.sort_values(by="Pacotes", ascending=False).head(5)
+    report += "|  # | LT        | Motorista                    |    Pacotes | Situação |\n"
+    report += "| -: | --------- | ---------------------------- | ---------: | --------------------- |\n"
+    for i, (_, row) in enumerate(top5.iterrows(), 1):
+        medal = "🥇" if i == 1 else ("🥈" if i == 2 else ("🥉" if i == 3 else str(i)))
+        report += f"| {medal} | **{row['LT_Short']}** | {row['Motorista']} | **{row['Pacotes']:,}** | {row['Status_Operacional']} |\n"
+    report += "\n---\n\n"
+
+    # PLANO DE AÇÃO IMEDIATO
+    report += "# 🎯 PLANO DE AÇÃO IMEDIATO\n\n"
+    report += "### 🔴 COBRAR AGORA\n"
+    report += "Acionar imediatamente os veículos em Delay e sem sinal.\n\n"
+    report += "### 🟠 MONITORAR PRÓXIMOS 30 MIN\n"
+    report += "Acompanhar os veículos em tendência de atraso e parados.\n\n"
+    report += "### 🟡 ESCALAR SE NÃO HOUVER EVOLUÇÃO\n"
+    report += "Escalonar criticidades persistentes.\n\n"
+    report += "### 🟢 SEM NECESSIDADE DE AÇÃO IMEDIATA\n"
+    report += "Demais LTs com margem compatível.\n\n"
+
+    # RESUMO SIMPLIFICADO
+    report += "# RESUMO SIMPLIFICADO\n\n"
+    report += "```text\n"
+    report += "Delay:\n"
+    for _, row in criticos.iterrows():
+        report += f"{row['LT_Full']}\n"
+    report += "\nTendência de atraso:\n"
+    for _, row in riscos.iterrows():
+        report += f"{row['LT_Full']}\n"
+    report += "\nSem sinal:\n"
+    for _, row in sem_sinal_df.iterrows():
+        report += f"{row['LT_Full']}\n"
+    report += "----------------\n"
+    report += "```\n"
+
     return report
 
 # --- INTERFACE PRINCIPAL ---
@@ -345,7 +402,7 @@ if gerar_btn:
     if raw_text.strip():
         df_parsed = process_data_local(raw_text, data_plantao_str)
         if df_parsed.empty:
-            st.error("⚠️ Nenhum dado válido encontrado para este range de plantão. Verifique se o formato da data está como DD/MM/AAAA.")
+            st.error("⚠️ Nenhum dado válido encontrado para este range de plantão.")
             st.session_state["relatorio_gerado"] = ""
             st.session_state["df_parsed"] = None
         else:
@@ -390,92 +447,37 @@ if st.session_state["relatorio_gerado"]:
     ])
 
     with tab_relatorio:
-        st.markdown("#### 📋 Pré-visualização do Relatório Completo")
-        st.info("Este relatório consolida o status da frota, os riscos, veículos parados e o plano de ação para o plantão:")
-        st.text_area("Texto formatado completo para envio:", value=st.session_state["relatorio_gerado"], height=350)
+        st.markdown("#### 📋 Pré-visualização do Relatório no Formato Solicitado")
+        st.info("O texto abaixo está formatado exatamente com o template operacional exigido:")
+        st.text_area("Texto formatado completo:", value=st.session_state["relatorio_gerado"], height=400)
 
     with tab_performance:
-        st.markdown("#### 🌐 Performance por Rota (UF) — Turno de Escala (12x36)")
-        st.info(f"📅 **Range do Plantão Ativo:** Das 19:00 de {data_plantao_str} até às 15:00 do dia seguinte.")
-        
+        st.markdown("#### 🌐 Performance por Rota (UF)")
         ufs_disponiveis = df["UF"].unique()
-        
         for uf in sorted(ufs_disponiveis):
-            df_uf = df[df["UF"] == uf].copy()
-            total_pcts_uf = df_uf["Pacotes"].sum()
-            
-            if total_pcts_uf == 0: continue
-            
-            ganho_total = 0.0
-            for _, row in df_uf.iterrows():
-                impacto = row["Pacotes"] / total_pcts_uf
-                status_perf = row["Classificacao_Desempenho"]
-                ganho = impacto if status_perf == "No prazo" else 0.0
-                ganho_total += ganho
-            
-            performance_rota = ganho_total * 100.0
-            
-            st.markdown(f"### 📍 Rota / UF: **{uf}** | Performance: **{performance_rota:.2f}%**")
-            st.markdown(f"*Total de Pacotes na Rota: **{total_pcts_uf:,}** | LTs Analisadas: **{len(df_uf)}***")
-            
-            col_chart, col_motivos = st.columns([6, 4])
-            
-            with col_chart:
-                contagem_status = df_uf["Classificacao_Desempenho"].value_counts().reset_index()
-                contagem_status.columns = ["Status", "Quantidade"]
-                
-                fig = px.pie(
-                    contagem_status, 
-                    names="Status", 
-                    values="Quantidade", 
-                    title=f"Distribuição de LTs - Rota {uf}",
-                    hole=0.4,
-                    color="Status",
-                    color_discrete_map={"No prazo": "#10b981", "Delay": "#dc2626", "Early": "#3b82f6"}
-                )
-                fig.update_layout(margin=dict(t=30, b=10, l=10, r=10), height=280)
-                st.plotly_chart(fig, use_container_width=True)
-                
-            with col_motivos:
-                st.markdown("##### 🔍 Motivos de Impacto / Ocorrências")
-                df_motivos = df_uf[df_uf["Motivo_Parada"] != ""]["Motivo_Parada"].value_counts().reset_index()
-                if not df_motivos.empty:
-                    df_motivos.columns = ["Motivo", "Ocorrências"]
-                    st.dataframe(df_motivos, use_container_width=True, hide_index=True)
-                else:
-                    st.success("Nenhuma ocorrência registrada para esta rota.")
-                    
-            st.markdown("---")
+            df_uf = df[df["UF"] == uf]
+            st.markdown(f"**{uf}**: {len(df_uf)} LTs | {df_uf['Pacotes'].sum():,} pacotes")
 
     with tab_parados:
-        st.markdown("#### 🛑 Veículos Parados (Ordenados por Maior Tempo Parado)")
-        df_parados = df[df["Status_Movimento"] == "Parado"].sort_values(by="Tempo_Horas", ascending=False)
+        st.markdown("#### 🛑 Veículos Parados")
+        df_parados = df[df["Status_Movimento"] == "Parado"]
         if not df_parados.empty:
-            view_parados = df_parados[["LT_Short", "Motorista", "Pacotes", "Tempo_Str", "ETA", "Destino", "Motivo_Parada"]].copy()
-            view_parados.columns = ["LT", "Motorista", "Pacotes", "Tempo Parado", "ETA Destino", "Destino", "Motivo da Parada"]
-            st.dataframe(view_parados, use_container_width=True, hide_index=True)
+            st.dataframe(df_parados[["LT_Short", "Motorista", "Pacotes", "Tempo_Str", "Destino", "Motivo_Parada"]], use_container_width=True, hide_index=True)
         else:
-            st.success("Nenhum veículo parado no momento neste recorte.")
+            st.success("Nenhum veículo parado.")
 
     with tab_tendencia:
-        st.markdown("#### ⚠️ Veículos em Tendência de Atraso (Ordenados por Menor Gordura / Margem)")
-        df_tendencia = df[df["Status_Operacional"] == "Tendência"].sort_values(by="Margem_Minutos", ascending=True)
+        st.markdown("#### ⚠️ Tendência de Atraso")
+        df_tendencia = df[df["Status_Operacional"] == "Tendência"]
         if not df_tendencia.empty:
-            view_tendencia = df_tendencia[["LT_Short", "Motorista", "Pacotes", "Margem_Minutos", "ETA", "Velocidade", "Motivo_Risco", "Destino"]].copy()
-            view_tendencia.columns = ["LT", "Motorista", "Pacotes", "Margem (min)", "ETA Destino", "Vel. (km/h)", "Evidência / Motivo", "Destino"]
-            st.dataframe(view_tendencia, use_container_width=True, hide_index=True)
+            st.dataframe(df_tendencia[["LT_Short", "Motorista", "Pacotes", "ETA", "Motivo_Risco"]], use_container_width=True, hide_index=True)
         else:
-            st.success("Nenhum veículo com tendência de atraso identificada.")
+            st.success("Nenhuma tendência de atraso.")
 
     with tab_top10:
-        st.markdown("#### 📦 Top 10 Maiores Volumes de Carga")
-        df_top10 = df.sort_values(by="Pacotes", ascending=False).head(10)
-        view_top10 = df_top10[["LT_Short", "Motorista", "Pacotes", "Status_Operacional", "ETA", "Destino"]].copy()
-        view_top10.columns = ["LT", "Motorista", "Pacotes", "Status Operacional", "ETA Destino", "Destino"]
-        st.dataframe(view_top10, use_container_width=True, hide_index=True)
+        st.markdown("#### 📦 Top Volumes")
+        st.dataframe(df.sort_values(by="Pacotes", ascending=False).head(10)[["LT_Short", "Motorista", "Pacotes", "ETA", "Destino"]], use_container_width=True, hide_index=True)
 
     with tab_tabela:
-        st.markdown("#### 📊 Detalhamento Geral da Frota (Tabela Analítica)")
-        view_geral = df[["LT_Short", "Motorista", "Pacotes", "UF", "Status_Operacional", "Status_Movimento", "Velocidade", "Margem_Minutos", "ETA", "Destino"]].copy()
-        view_geral.columns = ["LT", "Motorista", "Pacotes", "UF", "Status Op.", "Movimento", "Vel. (km/h)", "Margem (min)", "ETA Destino", "Destino"]
-        st.dataframe(view_geral, use_container_width=True, hide_index=True)
+        st.markdown("#### 📊 Tabela Analítica Completa")
+        st.dataframe(df[["LT_Short", "Motorista", "Pacotes", "UF", "Status_Operacional", "Status_Movimento", "Velocidade", "ETA", "Destino"]], use_container_width=True, hide_index=True)

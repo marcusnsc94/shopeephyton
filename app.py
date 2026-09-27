@@ -2,7 +2,6 @@ import streamlit as st
 import pandas as pd
 import re
 from datetime import datetime, timedelta
-import plotly.express as px
 
 # --- CONFIGURAÇÃO DA PÁGINA ---
 st.set_page_config(
@@ -98,7 +97,6 @@ def parse_eta_to_datetime(eta_str, ano_atual):
 def extract_uf(destino):
     if not destino: return "OUTROS"
     dest_upper = str(destino).upper()
-    # Casos especiais baseados na requisição (LPA -> PA, LMA -> MA, etc.)
     if "LPA" in dest_upper: return "PA"
     if "LMA" in dest_upper: return "MA"
     
@@ -240,7 +238,7 @@ def process_data_local(text):
 
                 if sinais_deterioracao:
                     data["Status_Operacional"] = "Tendência"
-                    data["Classificacao_Desempenho"] = "No prazo" # Matematicamente ainda no prazo, mas com risco
+                    data["Classificacao_Desempenho"] = "No prazo"
                     data["Motivo_Risco"] = " | ".join(motivos)
                 else:
                     data["Status_Operacional"] = "Normal"
@@ -250,7 +248,6 @@ def process_data_local(text):
                 data["Status_Operacional"] = "Tendência"
                 data["Motivo_Risco"] = f"Sem atualização desde {data['Ultima_Atualizacao_Str']}."
 
-        # Verificações específicas para Early / Delay nas regras de performance
         motivo_lower = data["Motivo_Parada"].lower()
         if "aderência ao transit time" in motivo_lower or "saída antecipada" in motivo_lower or "early" in motivo_lower:
             data["Classificacao_Desempenho"] = "Early"
@@ -343,7 +340,7 @@ if st.session_state["relatorio_gerado"]:
 
     st.markdown("<br><br>", unsafe_allow_html=True)
 
-    # --- ABAS ORGANIZADAS (Incluindo Performance por Rota) ---
+    # --- ABAS ORGANIZADAS ---
     tab_relatorio, tab_performance, tab_parados, tab_tendencia, tab_top10, tab_tabela = st.tabs([
         "📋 Relatório Formatado", 
         "🌐 Performance por Rota (UF)",
@@ -361,8 +358,6 @@ if st.session_state["relatorio_gerado"]:
         st.markdown("#### 🌐 Performance por Rota (UF) — Turno Operacional")
         st.info("📅 **Range do Turno (Shift D):** ETA de 19:00 do dia atual até 15:00 do dia seguinte[cite: 5].")
         
-        # Filtro simulado ou automático do range de turno 19:00 - 15:00
-        # Vamos agrupar por UF
         ufs_disponiveis = df["UF"].unique()
         
         for uf in sorted(ufs_disponiveis):
@@ -371,21 +366,12 @@ if st.session_state["relatorio_gerado"]:
             
             if total_pcts_uf == 0: continue
             
-            # Cálculo de Ganhos e Performance por LT
             ganho_total = 0.0
-            detalhes_lt = []
             for _, row in df_uf.iterrows():
                 impacto = row["Pacotes"] / total_pcts_uf
                 status_perf = row["Classificacao_Desempenho"]
                 ganho = impacto if status_perf == "No prazo" else 0.0
                 ganho_total += ganho
-                detalhes_lt.append({
-                    "LT": row["LT_Short"],
-                    "Pacotes": row["Pacotes"],
-                    "Status": status_perf,
-                    "Impacto": impacto,
-                    "Ganho": ganho
-                })
             
             performance_rota = ganho_total * 100.0
             
@@ -395,21 +381,20 @@ if st.session_state["relatorio_gerado"]:
             col_chart, col_motivos = st.columns([6, 4])
             
             with col_chart:
-                # Gráfico de pizza (Contagem de LTs por Status: No prazo, Delay, Early)[cite: 5]
-                contagem_status = df_uf["Classificacao_Desempenho"].value_counts().reset_index()
-                contagem_status.columns = ["Status", "Quantidade"]
+                contagem_status = df_uf["Classificacao_Desempenho"].value_counts()
+                qtd_prazo = contagem_status.get("No prazo", 0)
+                qtd_delay = contagem_status.get("Delay", 0)
+                qtd_early = contagem_status.get("Early", 0)
                 
-                fig = px.pie(
-                    contagem_status, 
-                    names="Status", 
-                    values="Quantidade", 
-                    title=f"Distribuição de LTs - Rota {uf}",
-                    hole=0.4,
-                    color="Status",
-                    color_discrete_map={"No prazo": "#10b981", "Delay": "#dc2626", "Early": "#3b82f6"}
-                )
-                fig.update_layout(margin=dict(t=30, b=10, l=10, r=10), height=280)
-                st.plotly_chart(fig, use_container_width=True)
+                # Exibição visual limpa representando o status da rota
+                st.markdown(f"""
+                <div style="background: #ffffff; padding: 15px; border-radius: 10px; border: 1px solid #e2e8f0; text-align: center;">
+                    <b>Distribuição de LTs (Rota {uf})</b><br><br>
+                    <span style="color: #10b981; font-weight: bold; font-size: 16px;">🟢 No Prazo: {qtd_prazo}</span> &nbsp;&nbsp;|&nbsp;&nbsp;
+                    <span style="color: #dc2626; font-weight: bold; font-size: 16px;">🔴 Delay: {qtd_delay}</span> &nbsp;&nbsp;|&nbsp;&nbsp;
+                    <span style="color: #3b82f6; font-weight: bold; font-size: 16px;">🔵 Early: {qtd_early}</span>
+                </div>
+                """, unsafe_allow_html=True)
                 
             with col_motivos:
                 st.markdown("##### 🔍 Motivos de Impacto / Ocorrências")

@@ -269,7 +269,7 @@ def generate_report_text(df):
     criticos = df[df["Status_Operacional"] == "Delay"].copy()
     report += "🚨 **DELAY / ATRASO MATEMÁTICO**\n"
     if criticos.empty:
-        report += "Nenhuma LT em delay neste recorte[cite: 5].\n\n"
+        report += "Nenhuma LT em delay neste recorte.\n\n"
     else:
         for _, row in criticos.iterrows():
             report += f"⚠️ **{row['LT_Short']} — {row['Motorista']}** (ETA: {row['ETA']} | Pcts: {row['Pacotes']:,})\n\n"
@@ -277,7 +277,7 @@ def generate_report_text(df):
     report += "⚠️ **TENDÊNCIA DE ATRASO**\n"
     riscos = df[df["Status_Operacional"] == "Tendência"].copy()
     if riscos.empty:
-        report += "Nenhuma tendência de atraso[cite: 5].\n\n"
+        report += "Nenhuma tendência de atraso.\n\n"
     else:
         for _, row in riscos.iterrows():
             report += f"- **{row['LT_Short']}** (ETA: {row['ETA']} | Pcts: {row['Pacotes']:,}) - {row['Motivo_Risco']}\n"
@@ -357,7 +357,7 @@ if st.session_state["relatorio_gerado"]:
 
     with tab_performance:
         st.markdown("#### 🌐 Performance por Rota (UF) — Turno Operacional")
-        st.info("📅 **Range do Turno (Shift D):** ETA de 19:00 do dia atual até 15:00 do dia seguinte[cite: 5].")
+        st.info("📅 **Range do Turno (Shift D):** ETA de 19:00 do dia atual até 15:00 do dia seguinte.")
         
         ufs_disponiveis = df["UF"].unique()
         
@@ -382,7 +382,6 @@ if st.session_state["relatorio_gerado"]:
             col_chart, col_motivos = st.columns([6, 4])
             
             with col_chart:
-                # Gráfico de Pizza interativo com Plotly
                 contagem_status = df_uf["Classificacao_Desempenho"].value_counts().reset_index()
                 contagem_status.columns = ["Status", "Quantidade"]
                 

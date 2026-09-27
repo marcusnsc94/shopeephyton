@@ -121,12 +121,13 @@ def process_data_local(text, data_trabalho_str):
         data = {
             "LT_Full": "", "LT_Short": "", "Motorista": "", 
             "Origem": "", "Destino": "", "UF": "OUTROS", "Pacotes": 0,
-            "SLA": "", "ETA": "-", "Velocidade": 0, "Distancia_Raw": 0,
+            "ETA": "-", "Chegada_Real": "-", "Velocidade": 0, "Distancia_Raw": 0,
             "Distancia_Corrigida": 0, "Fator_Correcao": "",
             "Status_Movimento": "", "Tempo_Str": "0h00", "Tempo_Horas": 0.0,
             "Motivo_Parada": "", "Ultima_Atualizacao_Str": "", "Sem_Sinal": False,
             "Status_Operacional": "Normal", "Classificacao_Desempenho": "No prazo",
-            "Motivo_Risco": "", "Margem_Minutos": 999, "ETA_Dt": None
+            "Motivo_Risco": "", "Margem_Minutos": 999, "ETA_Dt": None,
+            "Chegada_Real_Dt": None, "Adiantamento_Minutos": None
         }
         
         lines = [line.strip() for line in block.split('\n') if line.strip()]
@@ -198,17 +199,33 @@ def process_data_local(text, data_trabalho_str):
                     data["Sem_Sinal"] = True
             except: pass
 
+        # --- EXTRAÇÃO CORRIGIDA DE ETA / CHEGADA REAL ---
+        # No texto colado, logo acima da linha de status ("No prazo"/"Atrasado"/"Risco") vem:
+        #   [i-2] ETA programado (sempre uma data)
+        #   [i-1] chegada real (data) OU "—"/"-" se o condutor ainda não deu chegada
+        # Antes esses dois campos estavam invertidos (pegava a chegada como se fosse o ETA).
         for i, line in enumerate(lines):
             if 'No prazo' in line or 'Atrasado' in line or 'Risco' in line:
-                if i >= 1 and (re.match(date_pattern, lines[i-1]) or lines[i-1] != ''):
-                    data["ETA"] = lines[i-1]
+                if i >= 1:
+                    linha_chegada = lines[i-1]
+                    if re.match(date_pattern, linha_chegada):
+                        data["Chegada_Real"] = linha_chegada
+                    elif linha_chegada in ('-', '—'):
+                        data["Chegada_Real"] = linha_chegada
                 if i >= 2 and re.match(date_pattern, lines[i-2]):
-                    data["SLA"] = lines[i-2]
-                    
+                    data["ETA"] = lines[i-2]
+
+        # Fallback robusto: a primeira data que aparece no bloco é sempre o ETA programado
+        # (independente de variações de layout, a ordem no texto começa por ele)
         if data["ETA"] == "-" and len(dates_found) >= 1:
             data["ETA"] = dates_found[0]
 
         data["ETA_Dt"] = parse_eta_to_datetime(data["ETA"], ano_atual)
+        data["Chegada_Real_Dt"] = parse_eta_to_datetime(data["Chegada_Real"], ano_atual)
+
+        if data["ETA_Dt"] and data["Chegada_Real_Dt"]:
+            # positivo = chegou adiantado em relação ao ETA; negativo = chegou atrasado
+            data["Adiantamento_Minutos"] = int((data["ETA_Dt"] - data["Chegada_Real_Dt"]).total_seconds() / 60)
 
         dest_upper = str(data["Destino"]).upper()
         if "MA" in dest_upper and "SOC-PE" not in dest_upper:
@@ -262,6 +279,51 @@ def process_data_local(text, data_trabalho_str):
         
     df_result = pd.DataFrame(parsed_data)
     return df_result
+
+def classificar_performance(row):
+    """
+    Classifica a LT para fins de performance por rota (UF):
+    - Se já chegou (tem Chegada_Real_Dt): compara com o ETA programado.
+        * Chegou depois do ETA -> Delay
+        * Chegou mais de 31 min adiantada, ou motivo indica saída antecipada/
+          falta de aderência ao transit time -> Early
+        * Caso contrário -> No prazo
+    - Se ainda não chegou: usa a projeção matemática de risco (Status_Operacional)
+      pra Delay, e o motivo de ocorrência pra Early (não dá pra medir minutos de
+      adiantamento de quem ainda está em rota).
+    """
+    motivo = str(row["Motivo_Parada"] or "").lower()
+    chegada_dt = row["Chegada_Real_Dt"]
+    eta_dt = row["ETA_Dt"]
+
+    if chegada_dt and eta_dt:
+        diff_min = (eta_dt - chegada_dt).total_seconds() / 60
+        if diff_min < 0:
+            return "Delay"
+        if diff_min > 31 or "aderência" in motivo or "antecipada" in motivo:
+            return "Early"
+        return "No prazo"
+
+    if row["Status_Operacional"] == "Delay":
+        return "Delay"
+    if "aderência" in motivo or "antecipada" in motivo:
+        return "Early"
+    return "No prazo"
+
+def calcular_performance_rota(df_uf):
+    """
+    % de impacto de cada LT = Pacotes da LT / total de Pacotes da rota (dentro do range).
+    Ganho = % de impacto se a LT está "No prazo"; 0 se está em Delay ou Early.
+    Performance da rota = soma dos ganhos (em %).
+    """
+    total_pacotes = df_uf["Pacotes"].sum()
+    if total_pacotes == 0:
+        return 0.0, pd.Series(dtype=float)
+
+    impacto = df_uf["Pacotes"] / total_pacotes
+    ganho = impacto.where(df_uf["Classificacao_Performance"] == "No prazo", 0.0)
+    performance_pct = ganho.sum() * 100
+    return performance_pct, ganho
 
 def generate_report_text(df):
     agora = datetime.utcnow() - timedelta(hours=3)
@@ -486,9 +548,7 @@ if st.session_state["relatorio_gerado"]:
             f"**19:00 de {data_plantao_str} até 15:00 do dia seguinte**."
         )
 
-        # --- FILTRO CORRIGIDO: janela real de datetime (19:00 do dia D até 15:00 do dia D+1) ---
-        # Antes comparava apenas a data (.dt.date == data), o que ignorava a hora e,
-        # em caso de erro de parsing, caía silenciosamente para "mostrar tudo" (df.copy()).
+        # --- FILTRO DE JANELA DO TURNO: 19:00 do dia D até 15:00 do dia D+1 ---
         try:
             dt_base = datetime.strptime(data_plantao_str, "%d/%m/%Y")
             inicio_turno = dt_base.replace(hour=19, minute=0, second=0, microsecond=0)
@@ -502,35 +562,62 @@ if st.session_state["relatorio_gerado"]:
         except ValueError:
             st.error(f"⚠️ Data de plantão inválida: '{data_plantao_str}'. Use o formato DD/MM/AAAA.")
             df_perf = df.iloc[0:0].copy()  # vazio — nunca cai para "mostrar tudo"
-        
+
         if not df_perf.empty:
+            # Classificação para fins de performance: No prazo / Delay / Early
+            df_perf["Classificacao_Performance"] = df_perf.apply(classificar_performance, axis=1)
+
             ufs_disponiveis = sorted(df_perf["UF"].unique())
-            
+
             for uf in ufs_disponiveis:
                 df_uf = df_perf[df_perf["UF"] == uf]
-                
-                st.markdown(f"---")
-                st.markdown(f"### 📍 Estado: **{uf}**")
-                
+                performance_pct, _ = calcular_performance_rota(df_uf)
+
+                qtd_no_prazo = len(df_uf[df_uf["Classificacao_Performance"] == "No prazo"])
+                qtd_delay = len(df_uf[df_uf["Classificacao_Performance"] == "Delay"])
+                qtd_early = len(df_uf[df_uf["Classificacao_Performance"] == "Early"])
+
+                st.markdown("---")
+                st.markdown(f"### 📍 Rota: **{uf}**")
+
                 col_uf1, col_uf2 = st.columns([4, 6])
                 with col_uf1:
-                    st.markdown(f"<br>", unsafe_allow_html=True)
+                    st.markdown("<br>", unsafe_allow_html=True)
                     st.markdown(f"* **Total de LTs (Turno D):** `{len(df_uf)}`")
                     st.markdown(f"* **Volume Total de Pacotes:** `{df_uf['Pacotes'].sum():,}`")
-                    st.markdown(f"* **No Prazo:** `{len(df_uf[df_uf['Status_Operacional'] == 'Normal'])}`")
-                    st.markdown(f"* **Tendência/Delay:** `{len(df_uf[df_uf['Status_Operacional'].isin(['Tendência', 'Delay'])])}`")
-                    
+                    st.markdown(f"* 🟢 **No Prazo:** `{qtd_no_prazo}`")
+                    st.markdown(f"* 🔴 **Delay:** `{qtd_delay}`")
+                    st.markdown(f"* 🔵 **Early:** `{qtd_early}`")
+                    st.markdown(
+                        f"<div class='metric-card' style='margin-top:10px;'>"
+                        f"<div class='metric-title'>Performance da Rota</div>"
+                        f"<div class='metric-value' style='color:#ee4d2d;'>{performance_pct:.1f}%</div>"
+                        f"</div>",
+                        unsafe_allow_html=True
+                    )
+
                 with col_uf2:
                     fig_uf = px.pie(
-                        df_uf, 
-                        names="Status_Operacional", 
-                        title=f"Status Operacional — {uf} (Turno D)",
-                        color="Status_Operacional",
-                        color_discrete_map={"Normal": "#10b981", "Tendência": "#f59e0b", "Delay": "#dc2626"},
+                        df_uf,
+                        names="Classificacao_Performance",
+                        title=f"Distribuição de LTs — {uf} (Turno D)",
+                        color="Classificacao_Performance",
+                        color_discrete_map={"No prazo": "#10b981", "Delay": "#dc2626", "Early": "#3b82f6"},
                         hole=0.4
                     )
                     fig_uf.update_layout(margin=dict(t=30, b=10, l=10, r=10), height=240)
                     st.plotly_chart(fig_uf, use_container_width=True, key=f"pie_{uf}")
+
+                # Motivos de ocorrência que impactaram a performance dessa rota (Delay + Early)
+                impactantes = df_uf[df_uf["Classificacao_Performance"].isin(["Delay", "Early"])]
+                motivos_validos = impactantes[impactantes["Motivo_Parada"] != ""]["Motivo_Parada"]
+                if not motivos_validos.empty:
+                    st.markdown("**📋 Motivos de ocorrência que impactaram a performance:**")
+                    contagem = motivos_validos.value_counts()
+                    for motivo, qtd in contagem.items():
+                        st.markdown(f"- {motivo} — `{qtd}` LT(s)")
+                else:
+                    st.caption("Nenhum motivo de ocorrência registrado para os desvios desta rota.")
         else:
             st.warning(
                 f"Nenhuma LT encontrada com ETA entre 19:00 de {data_plantao_str} "
@@ -559,4 +646,4 @@ if st.session_state["relatorio_gerado"]:
 
     with tab_tabela:
         st.markdown("#### 📊 Tabela Analítica Completa")
-        st.dataframe(df[["LT_Short", "Motorista", "Pacotes", "UF", "Status_Operacional", "Status_Movimento", "Velocidade", "ETA", "Destino"]], use_container_width=True, hide_index=True)
+        st.dataframe(df[["LT_Short", "Motorista", "Pacotes", "UF", "Status_Operacional", "Status_Movimento", "Velocidade", "ETA", "Chegada_Real", "Destino"]], use_container_width=True, hide_index=True)

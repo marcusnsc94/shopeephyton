@@ -11,31 +11,42 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# --- ESTILIZAÇÃO CSS AVANÇADA (UI/UX Sofisticada) ---
+# --- ESTILIZAÇÃO CSS AVANÇADA (UI/UX Corporativa) ---
 st.markdown(
     """
     <style>
-    /* Estilo Geral de Fundo e Tipografia */
     .main {
-        background-color: #f8f9fa;
+        background-color: #f4f6f9;
     }
     
-    /* Cartões de Métricas (KPIs) */
+    /* Cartões de Métricas Modernos */
     .metric-card {
-        background-color: #ffffff;
-        border: 1px solid #e0e0e0;
-        border-radius: 10px;
-        padding: 20px;
-        box-shadow: 0 4px 6px rgba(0,0,0,0.02);
+        background: #ffffff;
+        border: 1px solid #e2e8f0;
+        border-radius: 12px;
+        padding: 18px;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.02);
         text-align: center;
-        transition: transform 0.2s;
+        transition: all 0.3s ease;
     }
     .metric-card:hover {
-        transform: translateY(-2px);
-        box-shadow: 0 6px 12px rgba(238, 77, 45, 0.15);
+        transform: translateY(-3px);
+        box-shadow: 0 6px 12px rgba(238, 77, 45, 0.12);
         border-color: #ee4d2d;
     }
-    
+    .metric-title {
+        font-size: 13px;
+        color: #64748b;
+        font-weight: 600;
+        text-transform: uppercase;
+        margin-bottom: 6px;
+    }
+    .metric-value {
+        font-size: 24px;
+        font-weight: 700;
+        color: #1e293b;
+    }
+
     /* Botão Principal Shopee */
     div.stButton > button {
         background-color: #ee4d2d !important;
@@ -45,29 +56,19 @@ st.markdown(
         border-radius: 8px !important;
         width: 100%;
         padding: 0.7rem 1rem;
-        font-size: 16px;
-        box-shadow: 0 4px 10px rgba(238, 77, 45, 0.3);
+        font-size: 15px;
+        box-shadow: 0 4px 10px rgba(238, 77, 45, 0.25);
         transition: all 0.3s ease;
     }
     div.stButton > button:hover {
         background-color: #d73a1d !important;
-        box-shadow: 0 6px 15px rgba(238, 77, 45, 0.4);
+        box-shadow: 0 6px 15px rgba(238, 77, 45, 0.35);
         color: white !important;
     }
 
-    /* Cabeçalhos estilizados */
     h1, h2, h3 {
-        color: #222222;
+        color: #1e293b;
         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-    }
-    
-    /* Caixa de texto do relatório */
-    .stTextArea textarea {
-        font-family: 'Courier New', Courier, monospace !important;
-        font-size: 13px !important;
-        background-color: #fafafa !important;
-        border-radius: 8px !important;
-        border: 1px solid #dcdcdc !important;
     }
     </style>
     """,
@@ -88,7 +89,7 @@ def parse_duration(time_str):
 
 def parse_eta_to_datetime(eta_str, ano_atual):
     try:
-        if not eta_str or eta_str == '-': return None
+        if not eta_str or eta_str == '-' or eta_str == '—': return None
         return datetime.strptime(f"{eta_str}/{ano_atual}", "%d/%m %H:%M/%Y")
     except:
         return None
@@ -107,12 +108,12 @@ def process_data_local(text):
         data = {
             "LT_Full": "", "LT_Short": "", "Motorista": "", 
             "Origem": "", "Destino": "", "Pacotes": 0,
-            "SLA": "", "ETA": "", "Velocidade": 0, "Distancia_Raw": 0,
+            "SLA": "", "ETA": "-", "Velocidade": 0, "Distancia_Raw": 0,
             "Distancia_Corrigida": 0, "Fator_Correcao": "",
-            "Status_Movimento": "", "Tempo_Str": "", "Tempo_Horas": 0.0,
+            "Status_Movimento": "", "Tempo_Str": "0h00", "Tempo_Horas": 0.0,
             "Motivo_Parada": "", "Ultima_Atualizacao_Str": "", "Sem_Sinal": False,
             "Status_Operacional": "Normal", "Motivo_Risco": "",
-            "Margem_Minutos": 0, "Tempo_Disponivel_Min": 0, "Tempo_Necessario_Min": 0
+            "Margem_Minutos": 999, "Tempo_Disponivel_Min": 0, "Tempo_Necessario_Min": 0
         }
         
         lines = [line.strip() for line in block.split('\n') if line.strip()]
@@ -173,7 +174,7 @@ def process_data_local(text):
 
         for i, line in enumerate(lines):
             if 'No prazo' in line or 'Atrasado' in line or 'Risco' in line:
-                if i >= 1 and (re.match(date_pattern, lines[i-1]) or lines[i-1] == '—'):
+                if i >= 1 and (re.match(date_pattern, lines[i-1]) or lines[i-1] != ''):
                     data["ETA"] = lines[i-1]
                 if i >= 2 and re.match(date_pattern, lines[i-2]):
                     data["SLA"] = lines[i-2]
@@ -302,12 +303,12 @@ def generate_report_text(df):
         report += "Nenhum veículo parado há mais de 1 hora.\n"
     report += "\n"
 
-    report += "📦 **TOP 5 — MAIOR VOLUME DE PACOTES**\n"
-    top5 = df.sort_values(by="Pacotes", ascending=False).head(5)
-    report += "| Rank | LT | Motorista | Pacotes | Status | ETA |\n"
+    report += "📦 **TOP 10 — MAIOR VOLUME DE PACOTES**\n"
+    top10 = df.sort_values(by="Pacotes", ascending=False).head(10)
+    report += "| Rank | LT | Motorista | Pacotes | Status | ETA Destino |\n"
     report += "|---|---|---|---|---|---|\n"
-    medalhas = ["🥇", "🥈", "🥉", "4", "5"]
-    for i, (_, row) in enumerate(top5.iterrows()):
+    medalhas = ["🥇", "🥈", "🥉", "4º", "5º", "6º", "7º", "8º", "9º", "10º"]
+    for i, (_, row) in enumerate(top10.iterrows()):
         report += f"| {medalhas[i]} | {row['LT_Short']} | {row['Motorista']} | {row['Pacotes']:,} | {row['Status_Operacional']} | {row['ETA']} |\n"
     report += "\n"
 
@@ -360,82 +361,112 @@ def generate_report_text(df):
     
     return report
 
-# --- LAYOUT PRINCIPAL DA APLICAÇÃO ---
-st.markdown("<h1 style='text-align: center; color: #ee4d2d;'>🚛 Torre de Controle — Gerador Inteligente</h1>", unsafe_allow_html=True)
-st.markdown("<p style='text-align: center; color: #666666;'>Monitoramento preditivo, comportamental e logístico de frotas em tempo real.</p>", unsafe_allow_html=True)
-st.markdown("---")
+# --- INTERFACE PRINCIPAL ---
+st.markdown("<h1 style='text-align: center; color: #ee4d2d;'>🚛 Torre de Controle — Gestão Inteligente de Frotas</h1>", unsafe_allow_html=True)
+st.markdown("<p style='text-align: center; color: #64748b;'>Monitoramento preditivo, comportamental e logístico avançado em tempo real.</p>", unsafe_allow_html=True)
+st.markdown("<br>", unsafe_allow_html=True)
 
 if "relatorio_gerado" not in st.session_state:
     st.session_state["relatorio_gerado"] = ""
 if "df_parsed" not in st.session_state:
     st.session_state["df_parsed"] = None
 
-# Área de Entrada de Dados na Barra Lateral ou Topo Destacado
+# Área de Entrada de Dados
 with st.container():
-    st.markdown("### 📥 Entrada de Dados do Dashboard")
-    raw_text = st.text_area("Cole abaixo as informações copiadas do Losung Web:", height=140, placeholder="Cole o texto bruto das LTs aqui...")
+    st.markdown("### 📥 Entrada de Dados Operacionais")
+    raw_text = st.text_area("Cole abaixo o texto extraído do Losung Web:", height=140, placeholder="Ex: LT01234567 ...")
     
-    col_btn1, col_btn2, _ = st.columns([2, 2, 6])
-    with col_btn1:
+    col_b1, _ = st.columns([2, 8])
+    with col_b1:
         gerar_btn = st.button("Gerar Relatório Analítico")
 
 if gerar_btn:
     if raw_text.strip():
         df_parsed = process_data_local(raw_text)
         if df_parsed.empty:
-            st.error("⚠️ Nenhum dado válido encontrado. Verifique o formato do texto copiado.")
+            st.error("⚠️ Nenhum dado válido encontrado. Certifique-se de copiar corretamente do dashboard.")
             st.session_state["relatorio_gerado"] = ""
             st.session_state["df_parsed"] = None
         else:
             st.session_state["relatorio_gerado"] = generate_report_text(df_parsed)
             st.session_state["df_parsed"] = df_parsed
     else:
-        st.warning("⚠️ Insira os dados do painel na caixa de texto antes de prosseguir.")
+        st.warning("⚠️ Insira os dados na caixa de texto acima antes de gerar.")
 
-# Se houver relatório gerado, exibe os painéis sofisticados com Abas
+# Se houver dados processados, exibe os novos score cards e abas organizadas
 if st.session_state["relatorio_gerado"]:
     df = st.session_state["df_parsed"]
     
     st.markdown("<br>", unsafe_allow_html=True)
+    st.markdown("### 📊 Indicadores Operacionais (Score Cards)")
     
-    # 📊 Métricas de Resumo em Cards Modernos
+    # Cálculos dos KPIs solicitados
     total_lts = len(df)
-    qtd_delay = len(df[df["Status_Operacional"] == "Delay"])
-    qtd_tendencia = len(df[df["Status_Operacional"] == "Tendência"])
     qtd_normal = len(df[df["Status_Operacional"] == "Normal"])
-    total_pacotes = df["Pacotes"].sum()
+    qtd_parados = len(df[df["Status_Movimento"] == "Parado"])
+    qtd_tendencia = len(df[df["Status_Operacional"] == "Tendência"])
+    top_volume_val = df["Pacotes"].max() if not df.empty else 0
 
-    m1, m2, m3, m4, m5 = st.columns(5)
-    with m1:
-        st.markdown(f"<div class='metric-card'><h4>Total LTs</h4><h2>{total_lts}</h2></div>", unsafe_allow_html=True)
-    with m2:
-        st.markdown(f"<div class='metric-card'><h4>Normal</h4><h2 style='color: #28a745;'>{qtd_normal}</h2></div>", unsafe_allow_html=True)
-    with m3:
-        st.markdown(f"<div class='metric-card'><h4>Tendência</h4><h2 style='color: #ffc107;'>{qtd_tendencia}</h2></div>", unsafe_allow_html=True)
-    with m4:
-        st.markdown(f"<div class='metric-card'><h4>Delay</h4><h2 style='color: #dc3545;'>{qtd_delay}</h2></div>", unsafe_allow_html=True)
-    with m5:
-        st.markdown(f"<div class='metric-card'><h4>Pacotes</h4><h2>{total_pacotes:,}</h2></div>", unsafe_allow_html=True)
+    # Ordem rigorosa solicitada dos score cards:
+    # 1. Total de LTs | 2. Veículos no prazo | 3. Veículos parados | 4. Veículos com tendência de atraso | 5. LTs com mais pacotes
+    k1, k2, k3, k4, k5 = st.columns(5)
+    
+    with k1:
+        st.markdown(f"<div class='metric-card'><div class='metric-title'>Total de LTs</div><div class='metric-value'>{total_lts}</div></div>", unsafe_allow_html=True)
+    with k2:
+        st.markdown(f"<div class='metric-card'><div class='metric-title'>Veículos no Prazo</div><div class='metric-value' style='color: #10b981;'>{qtd_normal}</div></div>", unsafe_allow_html=True)
+    with k3:
+        st.markdown(f"<div class='metric-card'><div class='metric-title'>Veículos Parados</div><div class='metric-value' style='color: #f59e0b;'>{qtd_parados}</div></div>", unsafe_allow_html=True)
+    with k4:
+        st.markdown(f"<div class='metric-card'><div class='metric-title'>Tendência Atraso</div><div class='metric-value' style='color: #ef4444;'>{qtd_tendencia}</div></div>", unsafe_allow_html=True)
+    with k5:
+        st.markdown(f"<div class='metric-card'><div class='metric-title'>Maior Volume (LT)</div><div class='metric-value' style='color: #ee4d2d;'>{top_volume_val:,} pcts</div></div>", unsafe_allow_html=True)
 
-    st.markdown("<br>", unsafe_allow_html=True)
+    st.markdown("<br><br>", unsafe_allow_html=True)
 
-    # Abas para Organização Visual
-    tab_relatorio, tab_tabela, tab_top = st.tabs(["📋 Relatório Formatado", "📊 Tabela Analítica & Status", "📦 Top Volumes & Frotas"])
+    # --- ABAS REORGANIZADAS ---
+    tab_relatorio, tab_parados, tab_tendencia, tab_top10, tab_tabela = st.tabs([
+        "📋 Relatório Formatado", 
+        "🛑 Veículos Parados", 
+        "⚠️ Tendência de Atraso", 
+        "📦 Top 10 Volumes", 
+        "📊 Tabela Analítica Completa"
+    ])
 
     with tab_relatorio:
-        st.markdown("#### Texto pronto para envio nos canais de comunicação:")
-        st.text_area("Copie o conteúdo abaixo:", value=st.session_state["relatorio_gerado"], height=450)
+        st.markdown("#### 📋 Pré-visualização do Relatório")
+        st.markdown("O texto abaixo está formatado de forma limpa e profissional. Utilize o botão no canto superior direito do bloco para copiar instantaneamente:")
+        st.code(st.session_state["relatorio_gerado"], language="markdown")
         
+    with tab_parados:
+        st.markdown("#### 🛑 Veículos Parados (Ordenados por Maior Tempo Parado)")
+        df_parados = df[df["Status_Movimento"] == "Parado"].sort_values(by="Tempo_Horas", ascending=False)
+        if not df_parados.empty:
+            view_parados = df_parados[["LT_Short", "Motorista", "Pacotes", "Tempo_Str", "ETA", "Destino", "Motivo_Parada"]].copy()
+            view_parados.columns = ["LT", "Motorista", "Pacotes", "Tempo Parado", "ETA Destino", "Destino", "Motivo da Parada"]
+            st.dataframe(view_parados, use_container_width=True, hide_index=True)
+        else:
+            st.success("Nenhum veículo parado no momento neste recorte.")
+
+    with tab_tendencia:
+        st.markdown("#### ⚠️ Veículos em Tendência de Atraso (Ordenados por Menor Gordura / Margem)")
+        df_tendencia = df[df["Status_Operacional"] == "Tendência"].sort_values(by="Margem_Minutos", ascending=True)
+        if not df_tendencia.empty:
+            view_tendencia = df_tendencia[["LT_Short", "Motorista", "Pacotes", "Margem_Minutos", "ETA", "Velocidade", "Motivo_Risco", "Destino"]].copy()
+            view_tendencia.columns = ["LT", "Motorista", "Pacotes", "Margem (min)", "ETA Destino", "Vel. (km/h)", "Evidência / Motivo", "Destino"]
+            st.dataframe(view_tendencia, use_container_width=True, hide_index=True)
+        else:
+            st.success("Nenhum veículo com tendência de atraso identificada.")
+
+    with tab_top10:
+        st.markdown("#### 📦 Top 10 Maiores Volumes de Carga")
+        df_top10 = df.sort_values(by="Pacotes", ascending=False).head(10)
+        view_top10 = df_top10[["LT_Short", "Motorista", "Pacotes", "Status_Operacional", "ETA", "Destino"]].copy()
+        view_top10.columns = ["LT", "Motorista", "Pacotes", "Status Operacional", "ETA Destino", "Destino"]
+        st.dataframe(view_top10, use_container_width=True, hide_index=True)
+
     with tab_tabela:
-        st.markdown("#### Detalhamento Completo da Frota Monitorada")
-        if df is not None and not df.empty:
-            # Seleção de colunas amigáveis para exibição
-            display_df = df[["LT_Short", "Motorista", "Pacotes", "Status_Operacional", "Status_Movimento", "Velocidade", "Margem_Minutos", "ETA", "Destino"]].copy()
-            display_df.columns = ["LT", "Motorista", "Pacotes", "Status Op.", "Movimento", "Vel. (km/h)", "Margem (min)", "ETA", "Destino"]
-            st.dataframe(display_df, use_container_width=True, hide_index=True)
-            
-    with tab_top:
-            st.markdown("#### 🏆 Top 5 Maiores Volumes de Carga")
-            top5_view = df.sort_values(by="Pacotes", ascending=False).head(5)[["LT_Short", "Motorista", "Pacotes", "Status_Operacional", "ETA"]]
-            top5_view.columns = ["LT", "Motorista", "Pacotes", "Status Operacional", "ETA"]
-            st.dataframe(top5_view, use_container_width=True, hide_index=True)
+        st.markdown("#### 📊 Detalhamento Geral da Frota (Tabela Analítica)")
+        view_geral = df[["LT_Short", "Motorista", "Pacotes", "Status_Operacional", "Status_Movimento", "Velocidade", "Margem_Minutos", "ETA", "Destino"]].copy()
+        view_geral.columns = ["LT", "Motorista", "Pacotes", "Status Op.", "Movimento", "Vel. (km/h)", "Margem (min)", "ETA Destino", "Destino"]
+        st.dataframe(view_geral, use_container_width=True, hide_index=True)

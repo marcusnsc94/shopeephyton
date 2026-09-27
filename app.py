@@ -124,7 +124,7 @@ def process_data_local(text):
         if len(first_line) > 1:
             data["Motorista"] = first_line[1]
             
-        # Extração robusta de pacotes (procura valores numéricos isolados válidos)
+        # Extração robusta de pacotes
         for line in lines:
             clean_line = line.replace('.', '').replace(',', '')
             if clean_line.isdigit():
@@ -133,7 +133,6 @@ def process_data_local(text):
                     data["Pacotes"] = val
                     break
         if data["Pacotes"] == 0:
-            # Fallback buscando números de 3 a 6 dígitos em qualquer parte
             nums = re.findall(r'\b\d{3,6}\b', block)
             if nums:
                 data["Pacotes"] = int(nums[0])
@@ -163,7 +162,6 @@ def process_data_local(text):
                     data["Destino"] = parts[1]
                 break
                 
-        # Fallback de destino se não achou no formato de aba
         if not data["Destino"]:
             dest_match = re.search(r'\b(SOC-[A-Z0-9\-]+|HUB-[A-Z0-9\-]+|LM\s+[A-Z0-9\-]+)\b', block)
             if dest_match:
@@ -187,7 +185,6 @@ def process_data_local(text):
                     data["Sem_Sinal"] = True
             except: pass
 
-        # Extração de ETA e SLA refinada
         for i, line in enumerate(lines):
             if 'No prazo' in line or 'Atrasado' in line or 'Risco' in line:
                 if i >= 1 and (re.match(date_pattern, lines[i-1]) or lines[i-1] != ''):
@@ -196,7 +193,6 @@ def process_data_local(text):
                     data["SLA"] = lines[i-2]
                     
         if data["ETA"] == "-" and len(dates_found) >= 1:
-            # Se encontrou datas mas o parsing acima falhou, assume a primeira data válida de ETA posterior
             data["ETA"] = dates_found[0]
 
         if "MA" in data["Destino"]:
@@ -413,21 +409,22 @@ if gerar_btn:
     else:
         st.warning("⚠️ Insira os dados na caixa de texto acima antes de gerar.")
 
-# Se houver dados processados, exibe os novos score cards e abas organizadas
+# Se houver dados processados, exibe os score cards na ordem exata solicitada e as abas
 if st.session_state["relatorio_gerado"]:
     df = st.session_state["df_parsed"]
     
     st.markdown("<br>", unsafe_allow_html=True)
     st.markdown("### 📊 Indicadores Operacionais (Score Cards)")
     
-    # Cálculos dos KPIs solicitados
+    # Cálculos dos KPIs
     total_lts = len(df)
     qtd_normal = len(df[df["Status_Operacional"] == "Normal"])
     qtd_parados = len(df[df["Status_Movimento"] == "Parado"])
     qtd_tendencia = len(df[df["Status_Operacional"] == "Tendência"])
-    top_volume_val = df["Pacotes"].max() if not df.empty else 0
+    qtd_delays = len(df[df["Status_Operacional"] == "Delay"])
 
-    # Ordem rigorosa solicitada dos score cards:
+    # Ordem rigorosa dos score cards:
+    # 1. Total de LTs | 2. Veículos no prazo | 3. Veículos parados | 4. Veículos com tendência de atraso | 5. Delays
     k1, k2, k3, k4, k5 = st.columns(5)
     
     with k1:
@@ -437,13 +434,13 @@ if st.session_state["relatorio_gerado"]:
     with k3:
         st.markdown(f"<div class='metric-card'><div class='metric-title'>Veículos Parados</div><div class='metric-value' style='color: #f59e0b;'>{qtd_parados}</div></div>", unsafe_allow_html=True)
     with k4:
-        st.markdown(f"<div class='metric-card'><div class='metric-title'>Tendência Atraso</div><div class='metric-value' style='color: #ef4444;'>{qtd_tendencia}</div></div>", unsafe_allow_html=True)
+        st.markdown(f"<div class='metric-card'><div class='metric-title'>Tendência Atraso</div><div class='metric-value' style='color: #d97706;'>{qtd_tendencia}</div></div>", unsafe_allow_html=True)
     with k5:
-        st.markdown(f"<div class='metric-card'><div class='metric-title'>Maior Volume (LT)</div><div class='metric-value' style='color: #ee4d2d;'>{top_volume_val:,} pcts</div></div>", unsafe_allow_html=True)
+        st.markdown(f"<div class='metric-card'><div class='metric-title'>Delays</div><div class='metric-value' style='color: #dc2626;'>{qtd_delays}</div></div>", unsafe_allow_html=True)
 
     st.markdown("<br><br>", unsafe_allow_html=True)
 
-    # --- ABAS REORGANIZADAS ---
+    # --- ABAS ORGANIZADAS ---
     tab_relatorio, tab_parados, tab_tendencia, tab_top10, tab_tabela = st.tabs([
         "📋 Relatório Formatado", 
         "🛑 Veículos Parados", 

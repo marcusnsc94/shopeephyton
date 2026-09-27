@@ -140,29 +140,25 @@ def process_data_local(text):
             data["Distancia_Corrigida"] = data["Distancia_Raw"] * 1.25
             data["Fator_Correcao"] = ""
             
-        # --- APLICANDO O NOVO MOTOR DE ANÁLISE RIGOROSO (Matemática + Comportamento) ---
+        # --- MOTOR DE ANÁLISE RIGOROSO (Matemática + Comportamento) ---
         eta_dt = parse_eta_to_datetime(data["ETA"], ano_atual)
         if eta_dt and data["Distancia_Raw"] > 0:
             tempo_disp_min = (eta_dt - agora_br).total_seconds() / 60
             data["Tempo_Disponivel_Min"] = int(tempo_disp_min)
             
-            # 1 km ≈ 1 min a 60 km/h
             tempo_nec_min = data["Distancia_Corrigida"]
             data["Tempo_Necessario_Min"] = int(tempo_nec_min)
             
             margem = tempo_disp_min - tempo_nec_min
             data["Margem_Minutos"] = int(margem)
             
-            # Verificação 1: DELAY (ETA inviável matematicamente ou sem margem)
             if margem < 0:
                 data["Status_Operacional"] = "Delay"
                 data["Motivo_Risco"] = f"Déficit matemático de {abs(int(margem))} min em relação ao ETA oficial."
             else:
-                # Verificação 2: TENDÊNCIA DE ATRASO (Viável, mas com sinais de deterioração)
                 sinais_deterioracao = False
                 motivos = []
                 
-                # Parada longa relevante (excluindo paradas programadas curtas se margem for gigante)
                 is_parada_programada = "programada" in data["Motivo_Parada"].lower() or "intervalo" in data["Motivo_Parada"].lower()
                 
                 if data["Status_Movimento"] == "Parado" and data["Tempo_Horas"] >= 0.5:
@@ -170,18 +166,15 @@ def process_data_local(text):
                         sinais_deterioracao = True
                         motivos.append(f"Parado há {data['Tempo_Str']} ({data['Motivo_Parada'] or 'Sem motivo especificado'})")
                 
-                # Ocorrências ativas graves (retenção fiscal, quebra, acidente, etc.)
                 if any(k in data["Motivo_Parada"] for k in ['Retenção', 'Acidente', 'Problema', 'Manutenção', 'Trânsito']):
                     if not is_parada_programada:
                         sinais_deterioracao = True
                         motivos.append(f"Ocorrência ativa: {data['Motivo_Parada']}")
 
-                # Velocidade muito baixa combinada com margem curta ou distância média/longa
                 if data["Status_Movimento"] == "Em trânsito" and 0 < data["Velocidade"] < 35 and margem < 90:
                     sinais_deterioracao = True
                     motivos.append(f"Velocidade reduzida ({data['Velocidade']} km/h) com margem restrita de {int(margem)} min.")
 
-                # Margem muito curta crítica independentemente de estar a andar (ex: < 30 min)
                 if margem < 30 and data["Velocidade"] < 50:
                     sinais_deterioracao = True
                     motivos.append(f"Margem de ETA extremamente baixa ({int(margem)} min) com velocidade de {data['Velocidade']} km/h.")
@@ -311,6 +304,16 @@ def generate_report_text(df):
     else:
         report += "Nenhum\n"
         
+    # --- NOVO GRUPO: VERIFICAR PARADA INDEVIDA ---
+    report += "\nVerificar parada indevida:\n"
+    # Condição: Parado há mais de 1h30 (1.5 horas), não chegou ao destino (distância raw > 0 ou não finalizado) e ETA ainda válido (margem >= 0)
+    paradas_indevidas = df[(df["Status_Movimento"] == "Parado") & (df["Tempo_Horas"] > 1.5) & (df["Margem_Minutos"] >= 0)].copy()
+    if not paradas_indevidas.empty:
+        for _, row in paradas_indevidas.iterrows():
+            report += f"{row['LT_Full']} (Parado há {row['Tempo_Str']}, Distância: {row['Distancia_Raw']} km, ETA: {row['ETA']})\n"
+    else:
+        report += "Nenhum\n"
+        
     report += "----------------\n"
     
     return report
@@ -342,7 +345,7 @@ if st.button("Gerar relatório agora!"):
 
 # Exibir resultado guardado no session_state se existir
 if st.session_state["relatorio_gerado"]:
-    st.success("Dados lidos com sucesso! Relatório gerado com os novos critérios preventivos.")
+    st.success("Dados lidos com sucesso! Relatório atualizado com o grupo 'Verificar parada indevida'.")
     st.text_area("Copie o texto abaixo (Ctrl+A e Ctrl+C):", value=st.session_state["relatorio_gerado"], height=600)
     
     with st.expander("Ver base de dados extraída (Para conferência)"):

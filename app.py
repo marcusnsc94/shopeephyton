@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import re
 from datetime import datetime, timedelta
+import plotly.express as px
 
 # --- CONFIGURAÇÃO DA PÁGINA ---
 st.set_page_config(
@@ -381,20 +382,21 @@ if st.session_state["relatorio_gerado"]:
             col_chart, col_motivos = st.columns([6, 4])
             
             with col_chart:
-                contagem_status = df_uf["Classificacao_Desempenho"].value_counts()
-                qtd_prazo = contagem_status.get("No prazo", 0)
-                qtd_delay = contagem_status.get("Delay", 0)
-                qtd_early = contagem_status.get("Early", 0)
+                # Gráfico de Pizza interativo com Plotly
+                contagem_status = df_uf["Classificacao_Desempenho"].value_counts().reset_index()
+                contagem_status.columns = ["Status", "Quantidade"]
                 
-                # Exibição visual limpa representando o status da rota
-                st.markdown(f"""
-                <div style="background: #ffffff; padding: 15px; border-radius: 10px; border: 1px solid #e2e8f0; text-align: center;">
-                    <b>Distribuição de LTs (Rota {uf})</b><br><br>
-                    <span style="color: #10b981; font-weight: bold; font-size: 16px;">🟢 No Prazo: {qtd_prazo}</span> &nbsp;&nbsp;|&nbsp;&nbsp;
-                    <span style="color: #dc2626; font-weight: bold; font-size: 16px;">🔴 Delay: {qtd_delay}</span> &nbsp;&nbsp;|&nbsp;&nbsp;
-                    <span style="color: #3b82f6; font-weight: bold; font-size: 16px;">🔵 Early: {qtd_early}</span>
-                </div>
-                """, unsafe_allow_html=True)
+                fig = px.pie(
+                    contagem_status, 
+                    names="Status", 
+                    values="Quantidade", 
+                    title=f"Distribuição de LTs - Rota {uf}",
+                    hole=0.4,
+                    color="Status",
+                    color_discrete_map={"No prazo": "#10b981", "Delay": "#dc2626", "Early": "#3b82f6"}
+                )
+                fig.update_layout(margin=dict(t=30, b=10, l=10, r=10), height=280)
+                st.plotly_chart(fig, use_container_width=True)
                 
             with col_motivos:
                 st.markdown("##### 🔍 Motivos de Impacto / Ocorrências")

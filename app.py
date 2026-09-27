@@ -267,102 +267,101 @@ def generate_report_text(df):
     agora = datetime.utcnow() - timedelta(hours=3)
     data_hora_str = agora.strftime("%d/%m/%Y · %H:%M")
     
-    criticos = df[(df["Status_Operacional"] == "Delay") & (~df["Sem_Sinal"])].copy()
-    riscos = df[(df["Status_Operacional"] == "Tendência") & (~df["Sem_Sinal"])].copy()
-    sem_sinal_df = df[df["Sem_Sinal"] == True].copy()
-    parados_df = df[df["Status_Movimento"] == "Parado"].sort_values(by="Tempo_Horas", ascending=False)
-    top5 = df.sort_values(by="Pacotes", ascending=False).head(5)
-
-    # RELATÓRIO EXECUTIVO PROFISSIONAL E ESTRUTURADO (COM MÁXIMA INFORMAÇÃO E EXPLICAÇÃO)
-    report = f"====================================================\n"
-    report += f"RELATÓRIO TÉCNICO DE MONITORAMENTO OPERACIONAL\n"
-    report += f"Data de Emissão: {data_hora_str}\n"
-    report += f"====================================================\n\n"
+    report = f"# MONITORAMENTO OPERACIONAL — {data_hora_str}\n\n"
+    report += f"**Total no recorte:** {len(df)} LTs\n"
+    report += "**Referência:** ETA oficial = primeiro horário.\n"
+    report += "**Velocidade de cálculo:** 60 km/h ≈ 1 km/min.\n"
+    report += "**Distância corrigida:** +25% nas rotas gerais; +30% somente para destinos em MA.\n"
+    report += "**Parada programada — intervalo/refeição:** não contabilizada como causa de atraso.\n\n"
+    report += "> **Correção importante:** neste recorte, as rotas para **SOC-PE2/SOC-PE4** são tratadas como rotas de PE, portanto a correção é **+25%**, não +30%.\n\n"
+    report += "---\n\n"
     
-    report += "### 1. SUMÁRIO EXECUTIVO E DIRETRIZES DE CÁLCULO\n"
-    report += f"O presente documento consolida a análise comportamental e preditiva da frota no recorte atual, totalizando {len(df)} Linhas de Transporte (LTs) ativas.\n\n"
-    report += "Parâmetros normativos aplicados nesta apuração:\n"
-    report += "• Referência de Horário: ETA oficial extraído do primeiro apontamento temporal de controle.\n"
-    report += "• Velocidade Média de Validação: Média padrão regulada em 60 km/h (equivalente a 1 km por minuto).\n"
-    report += "• Fator de Correção de Rota (Distância): Aplicado acréscimo de 25% nas rotas logísticas gerais e 30% restrito para destinos operacionais no Maranhão (MA).\n"
-    report += "• Exceção de Rota: Destinos direcionados aos hubs SOC-PE2/SOC-PE4 são processados como malha de Pernambuco, aplicando-se o fator padrão de +25%.\n"
-    report += "• Descanso e Refeição: Paradas programadas para intervalo de motorista ou alimentação não são contabilizadas como fatores geradores de atraso crítico.\n\n"
-    report += "--- \n\n"
-
-    report += "### 2. ANALÍTICO DE DELAYS E ATRASOS CRÍTICOS\n"
+    report += "# 🚨 DELAY / ATRASO\n\n"
+    criticos = df[(df["Status_Operacional"] == "Delay") & (~df["Sem_Sinal"])].copy()
     if criticos.empty:
-        report += "Status Atual: Nenhum veículo sob incidência de delay matemático ou atraso crítico confirmado neste recorte de monitoramento.\n\n"
+        report += "Nenhuma LT em delay neste recorte.\n\n"
     else:
-        report += f"Foram identificadas {len(criticos)} unidades operando em condição de atraso crítico. Segue o detalhamento técnico individual:\n\n"
         for _, row in criticos.iterrows():
-            report += f"• Veículo / LT: {row['LT_Full']} — Motorista: {row['Motorista'] or 'Não informado'}\n"
-            report += f"  - Previsão de Chegada (ETA): {row['ETA']}\n"
-            report += f"  - Volume Transportado: {row['Pacotes']:,} pacotes\n"
-            report += f"  - Trajeto e Quilometragem: {row['Distancia_Raw']} km nominais → {row['Distancia_Corrigida']:.2f} km corrigidos\n"
-            report += f"  - Parâmetro Dinâmico: Velocidade atual registrada de {row['Velocidade']} km/h\n"
+            report += f"## 🔴 {row['LT_Full']} — {row['Motorista']}\n\n"
+            report += f"* **ETA:** {row['ETA']}\n"
+            report += f"* **Pacotes:** {row['Pacotes']:,}\n"
+            report += f"* **Distância:** {row['Distancia_Raw']} km → **{row['Distancia_Corrigida']:.2f} km corrigidos**\n"
+            report += f"* **Velocidade:** {row['Velocidade']} km/h\n"
             if row['Status_Movimento'] == 'Parado':
-                report += f"  - Ocorrência de Parada: Imobilizado há {row['Tempo_Str']}\n"
+                report += f"* **Parado:** {row['Tempo_Str']}\n"
             if row['Motivo_Parada']:
-                report += f"  - Justificativa Declarada: {row['Motivo_Parada']}\n"
-            report += f"  - Diagnóstico de Risco: {row['Motivo_Risco']}\n"
-            report += f"  - Ação Requerida da Torre: Acionamento imediato do encarregado de rota para revalidação de itinerário e mitigação de impacto.\n\n"
+                report += f"* **Ocorrência:** {row['Motivo_Parada']}\n"
+            report += f"* {row['Motivo_Risco']}\n\n"
+            report += "**Ação:** Cobrança imediata da situação e acompanhamento.\n\n"
 
-    report += "--- \n\n"
-
-    report += "### 3. TENDÊNCIAS DE ATRASO E RISCO OPERACIONAL\n"
+    report += "# ⚠️ TENDÊNCIA DE ATRASO / RISCO OPERACIONAL\n\n"
+    riscos = df[(df["Status_Operacional"] == "Tendência") & (~df["Sem_Sinal"])].copy()
     if riscos.empty:
-        report += "Status Atual: Nenhuma tendência de deterioração de margem identificada na frota monitorada.\n\n"
+        report += "Nenhuma tendência de atraso identificada.\n\n"
     else:
-        report += f"Foram mapeadas {len(riscos)} unidades apresentando indícios preditivos de risco ou margens operacionais reduzidas:\n\n"
         for _, row in riscos.iterrows():
-            report += f"• Veículo / LT: {row['LT_Full']} — Motorista: {row['Motorista'] or 'Não informado'}\n"
-            report += f"  - Volume de Carga: {row['Pacotes']:,} pacotes | ETA: {row['ETA']}\n"
-            report += f"  - Distância Corrigida: {row['Distancia_Corrigida']:.2f} km | Velocidade Atual: {row['Velocidade']} km/h\n"
+            report += f"## 🟠 {row['LT_Full']} — {row['Motorista']}\n\n"
+            report += f"* **Pacotes:** {row['Pacotes']:,}\n"
+            report += f"* **ETA:** {row['ETA']}\n"
+            report += f"* **Distância:** {row['Distancia_Raw']} km → **{row['Distancia_Corrigida']:.2f} km corrigidos**\n"
+            report += f"* **Velocidade:** {row['Velocidade']} km/h\n"
             if row['Motivo_Parada']:
-                report += f"  - Evento Registrado: {row['Motivo_Parada']}\n"
+                report += f"* **Ocorrência/Parada:** {row['Motivo_Parada']}\n"
             if row['Motivo_Risco']:
-                report += f"  - Análise Comportamental: {row['Motivo_Risco']}\n"
-            report += f"  - Ação Requerida da Torre: Monitoramento contínuo da recuperação de velocidade nos próximos ciclos de telemetria.\n\n"
+                report += f"* **Evidência:** {row['Motivo_Risco']}\n\n"
+            report += "**Ação:** Monitorar e acompanhar recuperação de velocidade.\n\n"
 
-    report += "--- \n\n"
-
-    report += "### 4. MONITORAMENTO DE PERDA DE SINAL E TELEMETRIA\n"
+    report += "# 🚨 SEM SINAL\n\n"
+    sem_sinal_df = df[df["Sem_Sinal"] == True].copy()
     if sem_sinal_df.empty:
-        report += "Status Atual: Coleta telemétrica íntegra. Nenhuma unidade com ausência de sinal no momento.\n\n"
+        report += "Nenhum veículo sem sinal.\n\n"
     else:
-        report += f"Atenção: Identificadas {len(sem_sinal_df)} unidades com falha de comunicação ou ausência de atualização telemétrica:\n\n"
         for _, row in sem_sinal_df.iterrows():
-            report += f"• Veículo / LT: {row['LT_Full']} — Motorista: {row['Motorista'] or 'Não informado'}\n"
-            report += f"  - Previsão de Entrega (ETA): {row['ETA']}\n"
-            report += f"  - Última Posição Válida Capturada: {row['Ultima_Atualizacao_Str']}\n"
-            report += f"  - Condição: Sinal de GPS/GPRS indisponível há mais de 60 minutos.\n"
-            report += f"  - Ação Requerida da Torre: Escalonamento imediato via canal de voz com o motorista ou transportadora parceira.\n\n"
+            report += f"### 🔴 {row['LT_Full']} — {row['Motorista']}\n\n"
+            report += f"* ETA {row['ETA']}\n"
+            report += f"* **Sem sinal**\n"
+            report += f"* Última posição: {row['Ultima_Atualizacao_Str']}\n\n"
+            report += "**Ação:** Escalar imediatamente para localização/comunicação.\n\n"
 
-    report += "--- \n\n"
-
-    report += "### 5. CONSOLIDADO DE VEÍCULOS PARADOS\n"
+    report += "# 🚨 VEÍCULOS PARADOS — RISCO OPERACIONAL\n\n"
+    parados_df = df[df["Status_Movimento"] == "Parado"].sort_values(by="Tempo_Horas", ascending=False)
     if parados_df.empty:
-        report += "Status Atual: Nenhum veículo imobilizado na malha rodoviária neste instante.\n\n"
+        report += "Nenhum veículo parado no momento.\n\n"
     else:
-        report += f"Total de veículos parados: {len(parados_df)}. Relação ordenada por tempo de imobilização:\n\n"
+        report += "| LT        | Pacotes | Parado | Avaliação |\n"
+        report += "| --------- | ------: | -----: | --------------------------------------- |\n"
         for _, row in parados_df.iterrows():
-            report += f"• [{row['LT_Short']}] {row['Motorista'] or 'Condutor não ident.'} — {row['Pacotes']:,} pcts — Imobilizado há {row['Tempo_Str']} ({row['Status_Operacional']}) | Motivo: {row['Motivo_Parada'] or 'Parada em trânsito não detalhada'}\n"
-        report += "\n"
+            report += f"| **{row['LT_Short']}** | {row['Pacotes']:,} | {row['Tempo_Str']} | {row['Status_Operacional']} - {row['Motivo_Parada'] or 'Parado'} |\n"
+        report += "\n---\n\n"
 
-    report += "--- \n\n"
-
-    report += "### 6. DESTAQUES DE MAIOR VOLUME (TOP 5 CARGAS CRÍTICAS)\n"
-    report += "Unidades com maior representatividade de volume de pacotes sob monitoramento:\n\n"
+    report += "# 📦 TOP 5 — MAIOR VOLUME DE PACOTES\n\n"
+    top5 = df.sort_values(by="Pacotes", ascending=False).head(5)
+    report += "|  # | LT        | Motorista                    |    Pacotes | Situação |\n"
+    report += "| -: | --------- | ---------------------------- | ---------: | --------------------- |\n"
     for i, (_, row) in enumerate(top5.iterrows(), 1):
-        report += f"{i}º Lugar | LT: {row['LT_Full']} | Motorista: {row['Motorista'] or 'N/I'} | Volume: {row['Pacotes']:,} pacotes | Status: {row['Status_Operacional']}\n"
+        medal = "🥇" if i == 1 else ("🥈" if i == 2 else ("🥉" if i == 3 else str(i)))
+        report += f"| {medal} | **{row['LT_Short']}** | {row['Motorista']} | **{row['Pacotes']:,}** | {row['Status_Operacional']} |\n"
+    report += "\n---\n\n"
 
-    report += "\n--- \n\n"
+    report += "# 🎯 PLANO DE AÇÃO IMEDIATO\n\n"
+    report += "### 🔴 COBRAR AGORA\nAcionar imediatamente os veículos em Delay e sem sinal.\n\n"
+    report += "### 🟠 MONITORAR PRÓXIMOS 30 MIN\nAcompanhar os veículos em tendência de atraso e parados.\n\n"
+    report += "### 🟡 ESCALAR SE NÃO HOUVER EVOLUÇÃO\nEscalonar criticidades persistentes.\n\n"
+    report += "### 🟢 SEM NECESSIDADE DE AÇÃO IMEDIATA\nDemais LTs com margem compatível.\n\n"
 
-    report += "### 7. PLANO DE AÇÃO E DIRETRIZES DE ESCALONAMENTO\n"
-    report += "• Ação Imediata (Vermelho): Cobrança e rastreio imediato de todas as LTs classificadas em Delay e sem sinal.\n"
-    report += "• Acompanhamento Preventivo (Laranja): Observação rigorosa nos próximos 30 minutos para frotas com tendência de atraso ou paradas prolongadas.\n"
-    report += "• Escalonamento Gerencial (Amarelo): Acionamento de supervisão em caso de persistência de gargalos sem justificativa plausível.\n"
-    report += "• Manutenção de Fluxo (Verde): Demais rotas operando dentro dos parâmetros aceitáveis de margem temporal.\n"
+    report += "# RESUMO SIMPLIFICADO\n\n"
+    report += "```text\n"
+    report += "Delay:\n"
+    for _, row in criticos.iterrows():
+        report += f"{row['LT_Full']}\n"
+    report += "\nTendência de atraso:\n"
+    for _, row in riscos.iterrows():
+        report += f"{row['LT_Full']}\n"
+    report += "\nSem sinal:\n"
+    for _, row in sem_sinal_df.iterrows():
+        report += f"{row['LT_Full']}\n"
+    report += "----------------\n"
+    report += "```\n"
 
     return report
 
@@ -439,9 +438,9 @@ if st.session_state["relatorio_gerado"]:
     ])
 
     with tab_relatorio:
-        st.markdown("#### 📋 Pré-visualização do Relatório Executivo Corporativo")
-        st.info("O texto abaixo mantém todo o volume descritivo e explicações técnicas exigidas, organizado de forma limpa e profissional:")
-        st.text_area("Texto formatado completo:", value=st.session_state["relatorio_gerado"], height=450)
+        st.markdown("#### 📋 Pré-visualização do Relatório no Formato Solicitado")
+        st.info("O texto abaixo está formatado exatamente com o template operacional exigido:")
+        st.text_area("Texto formatado completo:", value=st.session_state["relatorio_gerado"], height=400)
 
     with tab_performance:
         st.markdown("#### 🌐 Performance por Rota (UF) — Filtrado pelo Turno D")

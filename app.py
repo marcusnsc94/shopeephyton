@@ -370,10 +370,12 @@ st.markdown("<h1 style='text-align: center; color: #ee4d2d;'>🚛 Torre de Contr
 st.markdown("<p style='text-align: center; color: #64748b;'>Monitoramento preditivo, comportamental e logístico avançado em tempo real.</p>", unsafe_allow_html=True)
 st.markdown("<br>", unsafe_allow_html=True)
 
+# CAMPO DE DATA DO PLANTÃO POSICIONADO DE FORMA DESTACADA
+st.markdown("### 📅 Configuração do Turno")
 col_s1, col_s2 = st.columns([3, 7])
 with col_s1:
     data_hoje_str = datetime.utcnow().strftime("%d/%m/%Y")
-    data_plantao_str = st.text_input("Data de Início do Plantão (DD/MM/AAAA):", value=data_hoje_str, placeholder="Ex: 27/09/2026")
+    data_plantao_str = st.text_input("Data de Início do Plantão / Turno D (DD/MM/AAAA):", value=data_hoje_str, placeholder="Ex: 27/09/2026")
 
 if "relatorio_gerado" not in st.session_state:
     st.session_state["relatorio_gerado"] = ""
@@ -441,47 +443,50 @@ if st.session_state["relatorio_gerado"]:
         st.text_area("Texto formatado completo:", value=st.session_state["relatorio_gerado"], height=400)
 
     with tab_performance:
-        st.markdown("#### 🌐 Performance por Rota (UF) e Distribuição de Status")
-        st.info("ℹ️ Esta aba aplica o filtro de ETA correspondente à janela do Time D (janela de 20 horas a partir da data do plantão informada).")
+        st.markdown("#### 🌐 Performance por Rota (UF) — Filtrado pelo Turno D")
+        st.info(f"ℹ️ Exibindo apenas as LTs com ETA na data do plantão informada: **{data_plantao_str}**.")
         
-        # --- APLICAÇÃO EXCLUSIVA DO FILTRO DE ETA DO TIME D NESTA ABA ---
+        # --- FILTRO EXCLUSIVO DO TIME D POR DATA ---
         try:
-            dt_inicio_plantao = datetime.strptime(data_plantao_str, "%d/%m/%Y")
-            dt_fim_plantao = dt_inicio_plantao + timedelta(hours=20)
-            
+            dt_inicio_plantao = datetime.strptime(data_plantao_str, "%d/%m/%Y").date()
             df_perf = df[
                 df["ETA_Dt"].notnull() & 
-                (df["ETA_Dt"] >= dt_inicio_plantao) & 
-                (df["ETA_Dt"] <= dt_fim_plantao)
+                (df["ETA_Dt"].dt.date == dt_inicio_plantao)
             ].copy()
         except:
             df_perf = df.copy()
         
-        col_p1, col_p2 = st.columns(2)
-        with col_p1:
-            st.markdown("##### Volume e LTs por UF (Time D)")
-            if not df_perf.empty:
-                ufs_disponiveis = df_perf["UF"].unique()
-                for uf in sorted(ufs_disponiveis):
-                    df_uf = df_perf[df_perf["UF"] == uf]
-                    st.markdown(f"* **{uf}**: {len(df_uf)} LTs | **{df_uf['Pacotes'].sum():,}** pacotes")
-            else:
-                st.warning("Nenhuma LT encontrada dentro do range de ETA do Time D para este recorte.")
+        if not df_perf.empty:
+            ufs_disponiveis = sorted(df_perf["UF"].unique())
+            
+            # Exibir cada UF individualmente com seu próprio gráfico de pizza
+            for uf in ufs_disponiveis:
+                df_uf = df_perf[df_perf["UF"] == uf]
                 
-        with col_p2:
-            if not df_perf.empty:
-                fig_status = px.pie(
-                    df_perf, 
-                    names="Status_Operacional", 
-                    title="Proporção de Status Operacional (Time D)",
-                    color="Status_Operacional",
-                    color_discrete_map={"Normal": "#10b981", "Tendência": "#f59e0b", "Delay": "#dc2626"},
-                    hole=0.4
-                )
-                fig_status.update_layout(margin=dict(t=30, b=10, l=10, r=10), height=280)
-                st.plotly_chart(fig_status, use_container_width=True)
-            else:
-                st.info("Sem dados para exibir o gráfico.")
+                st.markdown(f"---")
+                st.markdown(f"### 📍 Estado: **{uf}**")
+                
+                col_uf1, col_uf2 = st.columns([4, 6])
+                with col_uf1:
+                    st.markdown(f"<br>", unsafe_allow_html=True)
+                    st.markdown(f"* **Total de LTs (Turno D):** `{len(df_uf)}`")
+                    st.markdown(f"* **Volume Total de Pacotes:** `{df_uf['Pacotes'].sum():,}`")
+                    st.markdown(f"* **No Prazo:** `{len(df_uf[df_uf['Status_Operacional'] == 'Normal'])}`")
+                    st.markdown(f"* **Tendência/Delay:** `{len(df_uf[df_uf['Status_Operacional'].isin(['Tendência', 'Delay'])])}`")
+                    
+                with col_uf2:
+                    fig_uf = px.pie(
+                        df_uf, 
+                        names="Status_Operacional", 
+                        title=f"Status Operacional — {uf} (Turno D)",
+                        color="Status_Operacional",
+                        color_discrete_map={"Normal": "#10b981", "Tendência": "#f59e0b", "Delay": "#dc2626"},
+                        hole=0.4
+                    )
+                    fig_uf.update_layout(margin=dict(t=30, b=10, l=10, r=10), height=240)
+                    st.plotly_chart(fig_uf, use_container_width=True, key=f"pie_{uf}")
+        else:
+            st.warning(f"Nenhuma LT encontrada com ETA na data {data_plantao_str} para o Turno D.")
 
     with tab_parados:
         st.markdown("#### 🛑 Veículos Parados")

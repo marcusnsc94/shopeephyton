@@ -125,8 +125,10 @@ def generate_report_text(df):
     report += "Cálculo: 60 km/h ≈ 1 km/min, com distância corrigida em +25%; rotas para MA em +30%.\n"
     report += "Observação: não vou considerar “Parada programada — intervalo/refeição” como causa de atraso.\n\n"
     
+    # Critérios de Delay / Atraso (Próximo ao destino e velocidade muito baixa)
+    criticos = df[(df["Distancia_Raw"] <= 50) & (df["Distancia_Raw"] > 0) & (df["Velocidade"] < 20)].copy()
+    
     report += "🚨 **DELAY / ATRASO**\n"
-    criticos = df[(df["Distancia_Raw"] <= 50) & (df["Distancia_Raw"] > 0) & (df["Velocidade"] < 20)]
     if criticos.empty:
         report += "Neste recorte, nenhuma LT está matematicamente em DELAY pelo ETA.\n"
         report += "Os ETAs mais próximos ainda têm margem suficiente, mas há algumas situações que exigem cobrança preventiva.\n\n"
@@ -219,14 +221,30 @@ def generate_report_text(df):
     report += "🟢 **Sem necessidade de ação imediata**\n"
     report += "As demais LTs apresentam margem de ETA compatível com a distância restante e/ou estão em velocidade suficiente no momento.\n\n"
 
+    # --- RESUMO SIMPLIFICADO (CORRIGIDO) ---
     report += "**RESUMO SIMPLIFICADO**\n"
-    report += "Delay:\nNenhum\n\n"
-    report += "Tendência de atraso:\n"
-    for _, row in riscos.iterrows():
-        report += f"{row['LT_Full']}\n"
+    
+    report += "Delay:\n"
+    if not criticos.empty:
+        for _, row in criticos.iterrows():
+            report += f"{row['LT_Full']}\n"
+    else:
+        report += "Nenhum\n"
+        
+    report += "\nTendência de atraso:\n"
+    if not riscos.empty:
+        for _, row in riscos.iterrows():
+            report += f"{row['LT_Full']}\n"
+    else:
+        report += "Nenhuma\n"
+        
     report += "\nSem sinal:\n"
-    for _, row in df[df["Sem_Sinal"] == True].iterrows():
-        report += f"{row['LT_Full']}\n"
+    sem_sinal_df = df[df["Sem_Sinal"] == True]
+    if not sem_sinal_df.empty:
+        for _, row in sem_sinal_df.iterrows():
+            report += f"{row['LT_Full']}\n"
+    else:
+        report += "Nenhum\n"
         
     report += "----------------\n"
     

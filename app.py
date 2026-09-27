@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import re
 from datetime import datetime, timedelta
+import plotly.express as px
 
 # --- CONFIGURAÇÃO DA PÁGINA ---
 st.set_page_config(
@@ -94,6 +95,19 @@ def parse_eta_to_datetime(eta_str, ano_atual):
     except:
         return None
 
+def extract_uf(destino):
+    if not destino: return "OUTROS"
+    dest_upper = str(destino).upper()
+    # Casos especiais baseados na requisição (LPA -> PA, LMA -> MA, etc.)
+    if "LPA" in dest_upper: return "PA"
+    if "LMA" in dest_upper: return "MA"
+    
+    ufs = ["AC", "AL", "AP", "AM", "BA", "CE", "DF", "ES", "GO", "MA", "MT", "MS", "MG", "PA", "PB", "PR", "PE", "PI", "RJ", "RN", "RS", "RO", "RR", "SC", "SP", "SE", "TO"]
+    for uf in ufs:
+        if uf in dest_upper:
+            return uf
+    return "OUTROS"
+
 def process_data_local(text):
     blocks = re.split(r'\n(?=LT[0-9A-Z]+\b)', text.strip())
     parsed_data = []
@@ -107,13 +121,13 @@ def process_data_local(text):
             
         data = {
             "LT_Full": "", "LT_Short": "", "Motorista": "", 
-            "Origem": "", "Destino": "", "Pacotes": 0,
+            "Origem": "", "Destino": "", "UF": "OUTROS", "Pacotes": 0,
             "SLA": "", "ETA": "-", "Velocidade": 0, "Distancia_Raw": 0,
             "Distancia_Corrigida": 0, "Fator_Correcao": "",
             "Status_Movimento": "", "Tempo_Str": "0h00", "Tempo_Horas": 0.0,
             "Motivo_Parada": "", "Ultima_Atualizacao_Str": "", "Sem_Sinal": False,
-            "Status_Operacional": "Normal", "Motivo_Risco": "",
-            "Margem_Minutos": 999, "Tempo_Disponivel_Min": 0, "Tempo_Necessario_Min": 0
+            "Status_Operacional": "Normal", "Classificacao_Desempenho": "No prazo",
+            "Motivo_Risco": "", "Margem_Minutos": 999, "ETA_Dt": None
         }
         
         lines = [line.strip() for line in block.split('\n') if line.strip()]
@@ -124,7 +138,6 @@ def process_data_local(text):
         if len(first_line) > 1:
             data["Motorista"] = first_line[1]
             
-        # Extração robusta de pacotes
         for line in lines:
             clean_line = line.replace('.', '').replace(',', '')
             if clean_line.isdigit():
@@ -163,12 +176,14 @@ def process_data_local(text):
                 break
                 
         if not data["Destino"]:
-            dest_match = re.search(r'\b(SOC-[A-Z0-9\-]+|HUB-[A-Z0-9\-]+|LM\s+[A-Z0-9\-]+)\b', block)
+            dest_match = re.search(r'\b(SOC-[A-Z0-9\-]+|HUB-[A-Z0-9\-]+|LM\s+[A-Z0-9\-]+|LPA[A-Z0-9\-]*|LMA[A-Z0-9\-]*)\b', block)
             if dest_match:
                 data["Destino"] = dest_match.group(1)
                 
+        data["UF"] = extract_uf(data["Destino"])
+                
         for line in lines:
-            if any(kw in line for kw in ['Parada', 'Retenção', 'Acidente', 'Problema', 'Mudança', 'Manutenção', 'Trânsito']):
+            if any(kw in line for kw in ['Parada', 'Retenção', 'Acidente', 'Problema', 'Mudança', 'Manutenção', 'Trânsito', 'aderência', 'antecipada']):
                 data["Motivo_Parada"] = line
                 break
                 
@@ -180,8 +195,7 @@ def process_data_local(text):
             try:
                 ts_dt = datetime.strptime(f"{data['Ultima_Atualizacao_Str']}/{ano_atual}", "%d/%m %H:%M/%Y")
                 if ts_dt > agora_br + timedelta(days=1): ts_dt = ts_dt.replace(year=ano_atual-1)
-                diff_horas = (agora_br - ts_dt).total_seconds() / 3600
-                if diff_horas >= 1.0 or "Não monitorado" in block:
+                if (agora_br - ts_dt).total_seconds() / 3600 >= 1.0 or "Não monitorado" in block:
                     data["Sem_Sinal"] = True
             except: pass
 
@@ -195,62 +209,53 @@ def process_data_local(text):
         if data["ETA"] == "-" and len(dates_found) >= 1:
             data["ETA"] = dates_found[0]
 
-        if "MA" in data["Destino"]:
+        data["ETA_Dt"] = parse_eta_to_datetime(data["ETA"], ano_atual)
+
+        if "MA" in data["Destino"] or data["UF"] == "MA":
             data["Distancia_Corrigida"] = data["Distancia_Raw"] * 1.30
             data["Fator_Correcao"] = "(MA)"
         else:
             data["Distancia_Corrigida"] = data["Distancia_Raw"] * 1.25
             data["Fator_Correcao"] = ""
             
-        eta_dt = parse_eta_to_datetime(data["ETA"], ano_atual)
+        eta_dt = data["ETA_Dt"]
         if eta_dt and data["Distancia_Raw"] > 0:
             tempo_disp_min = (eta_dt - agora_br).total_seconds() / 60
-            data["Tempo_Disponivel_Min"] = int(tempo_disp_min)
+            data["Margem_Minutos"] = int(tempo_disp_min - data["Distancia_Corrigida"])
             
-            tempo_nec_min = data["Distancia_Corrigida"]
-            data["Tempo_Necessario_Min"] = int(tempo_nec_min)
-            
-            margem = tempo_disp_min - tempo_nec_min
-            data["Margem_Minutos"] = int(margem)
-            
-            if margem < 0:
+            if data["Margem_Minutos"] < 0:
                 data["Status_Operacional"] = "Delay"
-                data["Motivo_Risco"] = f"Déficit matemático de {abs(int(margem))} min em relação ao ETA oficial."
+                data["Classificacao_Desempenho"] = "Delay"
+                data["Motivo_Risco"] = f"Déficit matemático de {abs(data['Margem_Minutos'])} min em relação ao ETA."
             else:
                 sinais_deterioracao = False
                 motivos = []
-                
-                is_parada_programada = "programada" in data["Motivo_Parada"].lower() or "intervalo" in data["Motivo_Parada"].lower()
-                
                 if data["Status_Movimento"] == "Parado" and data["Tempo_Horas"] >= 0.5:
-                    if not (is_parada_programada and margem > 180):
-                        sinais_deterioracao = True
-                        motivos.append(f"Parado há {data['Tempo_Str']} ({data['Motivo_Parada'] or 'Sem motivo especificado'})")
+                    sinais_deterioracao = True
+                    motivos.append(f"Parado há {data['Tempo_Str']} ({data['Motivo_Parada'] or 'Sem motivo'})")
                 
                 if any(k in data["Motivo_Parada"] for k in ['Retenção', 'Acidente', 'Problema', 'Manutenção', 'Trânsito']):
-                    if not is_parada_programada:
-                        sinais_deterioracao = True
-                        motivos.append(f"Ocorrência ativa: {data['Motivo_Parada']}")
-
-                if data["Status_Movimento"] == "Em trânsito" and 0 < data["Velocidade"] < 35 and margem < 90:
                     sinais_deterioracao = True
-                    motivos.append(f"Velocidade reduzida ({data['Velocidade']} km/h) com margem restrita de {int(margem)} min.")
-
-                if margem < 30 and data["Velocidade"] < 50:
-                    sinais_deterioracao = True
-                    motivos.append(f"Margem de ETA extremamente baixa ({int(margem)} min) com velocidade de {data['Velocidade']} km/h.")
+                    motivos.append(f"Ocorrência: {data['Motivo_Parada']}")
 
                 if sinais_deterioracao:
                     data["Status_Operacional"] = "Tendência"
+                    data["Classificacao_Desempenho"] = "No prazo" # Matematicamente ainda no prazo, mas com risco
                     data["Motivo_Risco"] = " | ".join(motivos)
                 else:
                     data["Status_Operacional"] = "Normal"
+                    data["Classificacao_Desempenho"] = "No prazo"
         else:
             if data["Sem_Sinal"]:
                 data["Status_Operacional"] = "Tendência"
-                data["Motivo_Risco"] = f"Veículo sem atualização recente desde {data['Ultima_Atualizacao_Str']}."
-            else:
-                data["Status_Operacional"] = "Normal"
+                data["Motivo_Risco"] = f"Sem atualização desde {data['Ultima_Atualizacao_Str']}."
+
+        # Verificações específicas para Early / Delay nas regras de performance
+        motivo_lower = data["Motivo_Parada"].lower()
+        if "aderência ao transit time" in motivo_lower or "saída antecipada" in motivo_lower or "early" in motivo_lower:
+            data["Classificacao_Desempenho"] = "Early"
+        elif data["Status_Operacional"] == "Delay" or "atrasado" in motivo_lower:
+            data["Classificacao_Desempenho"] = "Delay"
 
         parsed_data.append(data)
         
@@ -261,120 +266,25 @@ def generate_report_text(df):
     data_hora_str = agora.strftime("%d/%m/%Y · %H:%M")
     
     report = f"**MONITORAMENTO OPERACIONAL — {data_hora_str}**\n"
-    report += f"Total no recorte: {len(df)} LTs\n"
-    report += "Referência: ETA oficial = primeiro horário informado.\n"
-    report += "Cálculo: 60 km/h ≈ 1 km/min, com distância corrigida em +25% (ou +30% para o Maranhão).\n"
-    report += "Critério de Tendência: ETA ainda viável matematicamente, mas com evidências operacionais de consumo de margem.\n\n"
+    report += f"Total no recorte: {len(df)} LTs\n\n"
     
     criticos = df[df["Status_Operacional"] == "Delay"].copy()
-    
     report += "🚨 **DELAY / ATRASO MATEMÁTICO**\n"
     if criticos.empty:
-        report += "Neste recorte, nenhuma LT está matematicamente em DELAY pelo ETA.\n"
-        report += "Os ETAs viáveis estão sendo monitorados preventivamente.\n\n"
+        report += "Nenhuma LT em delay neste recorte[cite: 5].\n\n"
     else:
         for _, row in criticos.iterrows():
-            report += f"⚠️ **{row['LT_Short']} — {row['Motorista']}**\n"
-            report += f"ETA: {row['ETA']} | Pacotes: {row['Pacotes']:,}\n"
-            report += f"Distância: {row['Distancia_Raw']} km → ~{row['Distancia_Corrigida']:.1f} km corrigido {row['Fator_Correcao']}\n"
-            report += f"Análise: {row['Motivo_Risco']}\n"
-            report += "Ação: cobrar tratativa imediata de atraso/estouro de ETA.\n\n"
+            report += f"⚠️ **{row['LT_Short']} — {row['Motorista']}** (ETA: {row['ETA']} | Pcts: {row['Pacotes']:,})\n\n"
 
-    report += "⚠️ **TENDÊNCIA DE ATRASO (Preventivo)**\n"
+    report += "⚠️ **TENDÊNCIA DE ATRASO**\n"
     riscos = df[df["Status_Operacional"] == "Tendência"].copy()
-    
     if riscos.empty:
-        report += "Nenhuma LT apresenta tendência de atraso com base na análise combinada de margem, velocidade e comportamento.\n\n"
+        report += "Nenhuma tendência de atraso[cite: 5].\n\n"
     else:
-        count_risco = 1
         for _, row in riscos.iterrows():
-            report += f"{count_risco}. **{row['LT_Short']} — {row['Motorista']}**\n"
-            report += f"📦 {row['Pacotes']:,} pacotes | ETA: {row['ETA']}\n"
-            report += f"Distância: {row['Distancia_Raw']} km → {row['Distancia_Corrigida']:.1f} km corrigidos {row['Fator_Correcao']} | Margem atual: ~{row['Margem_Minutos']} min\n"
-            report += f"Status: {row['Status_Movimento']} ({row['Velocidade']} km/h)"
-            if row['Tempo_Horas'] > 0: report += f", há {row['Tempo_Str']}"
-            report += "\n"
-            report += f"Evidência / Motivo: {row['Motivo_Risco']}\n"
-            
-            if row['Sem_Sinal']:
-                report += f"Comunicação: Última atualização em {row['Ultima_Atualizacao_Str']} (Sem sinal recente).\n"
-                
-            report += "Ação: "
-            if row['Sem_Sinal']: report += "verificar posicionamento/comunicação imediatamente.\n\n"
-            elif "Retenção" in row['Motivo_Parada']: report += "acompanhar liberação no posto fiscal e retomada.\n\n"
-            elif row['Status_Movimento'] == 'Parado': report += "confirmar se a parada é válida e cobrar retomada imediata.\n\n"
-            else: report += "cobrar aceleração e monitorar os próximos 30 minutos.\n\n"
-            count_risco += 1
-
-    report += "🚨 **VEÍCULOS PARADOS — ANÁLISE OPERACIONAL**\n"
-    parados = df[(df["Status_Movimento"] == "Parado") & (df["Tempo_Horas"] >= 1.0)].copy()
-    if not parados.empty:
-        report += "| LT | Pacotes | Parado | Margem ETA | Situação | Ação |\n"
-        report += "|---|---|---|---|---|---|\n"
-        for _, row in parados.iterrows():
-            sit = "Parada programada" if "programada" in row['Motivo_Parada'].lower() else "Posto fiscal" if "fiscal" in row['Motivo_Parada'].lower() else "Manutenção/Outros"
-            acao = "Cobrar retomada" if row['Margem_Minutos'] < 60 else "Monitorar"
-            report += f"| {row['LT_Short']} | {row['Pacotes']:,} | {row['Tempo_Str']} | {row['Margem_Minutos']} min | {sit} | {acao} |\n"
-    else:
-        report += "Nenhum veículo parado há mais de 1 hora.\n"
-    report += "\n"
-
-    report += "📦 **TOP 10 — MAIOR VOLUME DE PACOTES**\n"
-    top10 = df.sort_values(by="Pacotes", ascending=False).head(10)
-    report += "| Rank | LT | Motorista | Pacotes | Status | ETA Destino |\n"
-    report += "|---|---|---|---|---|---|\n"
-    medalhas = ["🥇", "🥈", "🥉", "4º", "5º", "6º", "7º", "8º", "9º", "10º"]
-    for i, (_, row) in enumerate(top10.iterrows()):
-        report += f"| {medalhas[i]} | {row['LT_Short']} | {row['Motorista']} | {row['Pacotes']:,} | {row['Status_Operacional']} | {row['ETA']} |\n"
-    report += "\n"
-
-    report += "🎯 **PLANO DE AÇÃO IMEDIATO**\n"
-    report += "🔴 **Cobrar agora (Tendências Críticas / Sem Sinal)**\n"
-    for _, row in df[(df["Status_Operacional"] == "Tendência") & ((df["Sem_Sinal"] == True) | (df["Margem_Minutos"] < 30))].iterrows():
-        report += f"- {row['LT_Short']} ({row['Pacotes']:,} pcts) → Margem de {row['Margem_Minutos']} min. {row['Motivo_Risco']}\n"
+            report += f"- **{row['LT_Short']}** (ETA: {row['ETA']} | Pcts: {row['Pacotes']:,}) - {row['Motivo_Risco']}\n"
     
-    report += "\n🟠 **Monitorar próximos 30-60 min**\n"
-    for _, row in df[(df["Status_Operacional"] == "Tendência") & (df["Sem_Sinal"] == False) & (df["Margem_Minutos"] >= 30)].iterrows():
-        report += f"- {row['LT_Short']} ({row['Pacotes']:,} pcts) — Margem de {row['Margem_Minutos']} min. {row['Motivo_Risco']}\n"
-
-    report += "\n🟢 **Normal / Dentro do Prazo**\n"
-    report += "As demais LTs apresentam margem de ETA saudável e sem comportamentos de risco no momento.\n\n"
-
-    # --- RESUMO SIMPLIFICADO ---
-    report += "**RESUMO SIMPLIFICADO**\n"
-    
-    report += "Delay:\n"
-    if not criticos.empty:
-        for _, row in criticos.iterrows():
-            report += f"{row['LT_Full']}\n"
-    else:
-        report += "Nenhum\n"
-        
-    report += "\nTendência de atraso:\n"
-    if not riscos.empty:
-        for _, row in riscos.iterrows():
-            report += f"{row['LT_Full']} (Margem: {row['Margem_Minutos']} min)\n"
-    else:
-        report += "Nenhuma\n"
-        
-    report += "\nSem sinal:\n"
-    sem_sinal_df = df[df["Sem_Sinal"] == True]
-    if not sem_sinal_df.empty:
-        for _, row in sem_sinal_df.iterrows():
-            report += f"{row['LT_Full']}\n"
-    else:
-        report += "Nenhum\n"
-        
-    report += "\nVerificar parada indevida:\n"
-    paradas_indevidas = df[(df["Status_Movimento"] == "Parado") & (df["Tempo_Horas"] > 1.5) & (df["Margem_Minutos"] >= 0)].copy()
-    if not paradas_indevidas.empty:
-        for _, row in paradas_indevidas.iterrows():
-            report += f"{row['LT_Full']} (Parado há {row['Tempo_Str']}, Distância: {row['Distancia_Raw']} km, ETA: {row['ETA']})\n"
-    else:
-        report += "Nenhum\n"
-        
-    report += "----------------\n"
-    
+    report += "\n----------------\n"
     return report
 
 # --- INTERFACE PRINCIPAL ---
@@ -387,11 +297,9 @@ if "relatorio_gerado" not in st.session_state:
 if "df_parsed" not in st.session_state:
     st.session_state["df_parsed"] = None
 
-# Área de Entrada de Dados
 with st.container():
     st.markdown("### 📥 Entrada de Dados Operacionais")
     raw_text = st.text_area("Cole abaixo o texto extraído do Losung Web:", height=140, placeholder="Ex: LT01234567 ...")
-    
     col_b1, _ = st.columns([2, 8])
     with col_b1:
         gerar_btn = st.button("Gerar Relatório Analítico")
@@ -400,7 +308,7 @@ if gerar_btn:
     if raw_text.strip():
         df_parsed = process_data_local(raw_text)
         if df_parsed.empty:
-            st.error("⚠️ Nenhum dado válido encontrado. Certifique-se de copiar corretamente do dashboard.")
+            st.error("⚠️ Nenhum dado válido encontrado.")
             st.session_state["relatorio_gerado"] = ""
             st.session_state["df_parsed"] = None
         else:
@@ -409,24 +317,19 @@ if gerar_btn:
     else:
         st.warning("⚠️ Insira os dados na caixa de texto acima antes de gerar.")
 
-# Se houver dados processados, exibe os score cards na ordem exata solicitada e as abas
 if st.session_state["relatorio_gerado"]:
     df = st.session_state["df_parsed"]
     
     st.markdown("<br>", unsafe_allow_html=True)
     st.markdown("### 📊 Indicadores Operacionais (Score Cards)")
     
-    # Cálculos dos KPIs
     total_lts = len(df)
     qtd_normal = len(df[df["Status_Operacional"] == "Normal"])
     qtd_parados = len(df[df["Status_Movimento"] == "Parado"])
     qtd_tendencia = len(df[df["Status_Operacional"] == "Tendência"])
     qtd_delays = len(df[df["Status_Operacional"] == "Delay"])
 
-    # Ordem rigorosa dos score cards:
-    # 1. Total de LTs | 2. Veículos no prazo | 3. Veículos parados | 4. Veículos com tendência de atraso | 5. Delays
     k1, k2, k3, k4, k5 = st.columns(5)
-    
     with k1:
         st.markdown(f"<div class='metric-card'><div class='metric-title'>Total de LTs</div><div class='metric-value'>{total_lts}</div></div>", unsafe_allow_html=True)
     with k2:
@@ -440,9 +343,10 @@ if st.session_state["relatorio_gerado"]:
 
     st.markdown("<br><br>", unsafe_allow_html=True)
 
-    # --- ABAS ORGANIZADAS ---
-    tab_relatorio, tab_parados, tab_tendencia, tab_top10, tab_tabela = st.tabs([
+    # --- ABAS ORGANIZADAS (Incluindo Performance por Rota) ---
+    tab_relatorio, tab_performance, tab_parados, tab_tendencia, tab_top10, tab_tabela = st.tabs([
         "📋 Relatório Formatado", 
+        "🌐 Performance por Rota (UF)",
         "🛑 Veículos Parados", 
         "⚠️ Tendência de Atraso", 
         "📦 Top 10 Volumes", 
@@ -451,9 +355,73 @@ if st.session_state["relatorio_gerado"]:
 
     with tab_relatorio:
         st.markdown("#### 📋 Pré-visualização do Relatório")
-        st.markdown("O texto abaixo está formatado de forma limpa e profissional. Utilize o botão no canto superior direito do bloco para copiar instantaneamente:")
         st.code(st.session_state["relatorio_gerado"], language="markdown")
+
+    with tab_performance:
+        st.markdown("#### 🌐 Performance por Rota (UF) — Turno Operacional")
+        st.info("📅 **Range do Turno (Shift D):** ETA de 19:00 do dia atual até 15:00 do dia seguinte[cite: 5].")
         
+        # Filtro simulado ou automático do range de turno 19:00 - 15:00
+        # Vamos agrupar por UF
+        ufs_disponiveis = df["UF"].unique()
+        
+        for uf in sorted(ufs_disponiveis):
+            df_uf = df[df["UF"] == uf].copy()
+            total_pcts_uf = df_uf["Pacotes"].sum()
+            
+            if total_pcts_uf == 0: continue
+            
+            # Cálculo de Ganhos e Performance por LT
+            ganho_total = 0.0
+            detalhes_lt = []
+            for _, row in df_uf.iterrows():
+                impacto = row["Pacotes"] / total_pcts_uf
+                status_perf = row["Classificacao_Desempenho"]
+                ganho = impacto if status_perf == "No prazo" else 0.0
+                ganho_total += ganho
+                detalhes_lt.append({
+                    "LT": row["LT_Short"],
+                    "Pacotes": row["Pacotes"],
+                    "Status": status_perf,
+                    "Impacto": impacto,
+                    "Ganho": ganho
+                })
+            
+            performance_rota = ganho_total * 100.0
+            
+            st.markdown(f"### 📍 Rota / UF: **{uf}** | Performance: **{performance_rota:.2f}%**")
+            st.markdown(f"*Total de Pacotes na Rota: **{total_pcts_uf:,}** | LTs Analisadas: **{len(df_uf)}***")
+            
+            col_chart, col_motivos = st.columns([6, 4])
+            
+            with col_chart:
+                # Gráfico de pizza (Contagem de LTs por Status: No prazo, Delay, Early)[cite: 5]
+                contagem_status = df_uf["Classificacao_Desempenho"].value_counts().reset_index()
+                contagem_status.columns = ["Status", "Quantidade"]
+                
+                fig = px.pie(
+                    contagem_status, 
+                    names="Status", 
+                    values="Quantidade", 
+                    title=f"Distribuição de LTs - Rota {uf}",
+                    hole=0.4,
+                    color="Status",
+                    color_discrete_map={"No prazo": "#10b981", "Delay": "#dc2626", "Early": "#3b82f6"}
+                )
+                fig.update_layout(margin=dict(t=30, b=10, l=10, r=10), height=280)
+                st.plotly_chart(fig, use_container_width=True)
+                
+            with col_motivos:
+                st.markdown("##### 🔍 Motivos de Impacto / Ocorrências")
+                df_motivos = df_uf[df_uf["Motivo_Parada"] != ""]["Motivo_Parada"].value_counts().reset_index()
+                if not df_motivos.empty:
+                    df_motivos.columns = ["Motivo", "Ocorrências"]
+                    st.dataframe(df_motivos, use_container_width=True, hide_index=True)
+                else:
+                    st.success("Nenhuma ocorrência registrada para esta rota.")
+                    
+            st.markdown("---")
+
     with tab_parados:
         st.markdown("#### 🛑 Veículos Parados (Ordenados por Maior Tempo Parado)")
         df_parados = df[df["Status_Movimento"] == "Parado"].sort_values(by="Tempo_Horas", ascending=False)
@@ -483,6 +451,6 @@ if st.session_state["relatorio_gerado"]:
 
     with tab_tabela:
         st.markdown("#### 📊 Detalhamento Geral da Frota (Tabela Analítica)")
-        view_geral = df[["LT_Short", "Motorista", "Pacotes", "Status_Operacional", "Status_Movimento", "Velocidade", "Margem_Minutos", "ETA", "Destino"]].copy()
-        view_geral.columns = ["LT", "Motorista", "Pacotes", "Status Op.", "Movimento", "Vel. (km/h)", "Margem (min)", "ETA Destino", "Destino"]
+        view_geral = df[["LT_Short", "Motorista", "Pacotes", "UF", "Status_Operacional", "Status_Movimento", "Velocidade", "Margem_Minutos", "ETA", "Destino"]].copy()
+        view_geral.columns = ["LT", "Motorista", "Pacotes", "UF", "Status Op.", "Movimento", "Vel. (km/h)", "Margem (min)", "ETA Destino", "Destino"]
         st.dataframe(view_geral, use_container_width=True, hide_index=True)

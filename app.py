@@ -5,8 +5,8 @@ from datetime import datetime, timedelta
 
 st.set_page_config(page_title="Gerador de Relatórios - Torre de Controle", layout="wide")
 
-st.title("🚛 Gerador de Relatórios Automatizado")
-st.markdown("Cole os dados do Losung Web para gerar o texto do relatório pronto a copiar.")
+st.title("🚛 Gerador de Relatórios Automatizado - Shopee")
+st.markdown("Cole os dados do Losung Web para gerar o texto do relatório operacional.")
 
 raw_text = st.text_area("Cole os dados do Dashboard aqui:", height=150)
 
@@ -45,7 +45,7 @@ def process_data(text):
             "SLA": "", "ETA": "", "Velocidade": 0, "Distancia_Raw": 0,
             "Distancia_Corrigida": 0, "Fator_Correcao": "",
             "Status_Movimento": "", "Tempo_Str": "", "Tempo_Horas": 0.0,
-            "Motivo_Parada": "", "Timestamp_Str": "", "Sem_Sinal": False,
+            "Motivo_Parada": "", "Ultima_Atualizacao_Str": "", "Sem_Sinal": False,
             "Risco_Atraso": False, "Motivo_Risco": ""
         }
         
@@ -96,9 +96,9 @@ def process_data(text):
         dates_found = re.findall(date_pattern, block)
         
         if len(dates_found) > 0:
-            data["Timestamp_Str"] = dates_found[-1]
+            data["Ultima_Atualizacao_Str"] = dates_found[-1]
             try:
-                ts_dt = datetime.strptime(f"{data['Timestamp_Str']}/{ano_atual}", "%d/%m %H:%M/%Y")
+                ts_dt = datetime.strptime(f"{data['Ultima_Atualizacao_Str']}/{ano_atual}", "%d/%m %H:%M/%Y")
                 if ts_dt > agora_br + timedelta(days=1): ts_dt = ts_dt.replace(year=ano_atual-1)
                 diff_horas = (agora_br - ts_dt).total_seconds() / 3600
                 if diff_horas >= 1.0 or "Não monitorado" in block:
@@ -123,21 +123,19 @@ def process_data(text):
         # --- MOTOR DE CÁLCULO DE TENDÊNCIA DE ATRASO (RIGOROSO) ---
         eta_dt = parse_eta_to_datetime(data["ETA"], ano_atual)
         if eta_dt and data["Distancia_Raw"] > 0:
-            # Velocidade efetiva estimada (se estiver parado ou muito lento, assumimos 50 km/h para cálculo de projeção se estiver em rota, senão usa a atual)
             vel_calculo = data["Velocidade"] if data["Velocidade"] > 10 else 50
             horas_necessarias = data["Distancia_Corrigida"] / vel_calculo
             eta_calculado = agora_br + timedelta(hours=horas_necessarias)
             
-            # Margem em minutos entre o que o sistema preve e o ETA oficial
             margem_minutos = (eta_dt - eta_calculado).total_seconds() / 60
             
-            # Critérios inteligentes e rígidos de tendência de atraso:
-            # 1. Se a margem de folga for inferior a 30 minutos (chega raspando ou atrasa)
+            # Critérios inteligentes e rígidos:
+            # 1. Margem de folga inferior a 30 min (ou cerca de 10 min)
             if margem_minutos < 30:
                 data["Risco_Atraso"] = True
                 data["Motivo_Risco"] = f"Margem de ETA muito justa ({int(margem_minutos)} min de folga estimada)."
             
-            # 2. Distância longa (> 600 km) com folga inferior a 2 horas (120 min) -> Risco alto de estouro por paragens obrigatórias
+            # 2. Distância longa (> 600 km) com folga inferior a 2 horas (120 min)
             elif data["Distancia_Raw"] > 600 and margem_minutos < 120:
                 data["Risco_Atraso"] = True
                 data["Motivo_Risco"] = f"Distância longa ({data['Distancia_Raw']} km) com margem reduzida ({int(margem_minutos/60)}h), sujeito a paragens de percurso."
@@ -161,13 +159,12 @@ def generate_report_text(df):
     report += "Cálculo: 60 km/h ≈ 1 km/min, com distância corrigida em +25%; rotas para MA em +30%.\n"
     report += "Observação: não vou considerar “Parada programada — intervalo/refeição” como causa de atraso.\n\n"
     
-    # Critérios de Delay / Atraso (Próximo ao destino e velocidade muito baixa)
     criticos = df[(df["Distancia_Raw"] <= 50) & (df["Distancia_Raw"] > 0) & (df["Velocidade"] < 20)].copy()
     
     report += "🚨 **DELAY / ATRASO**\n"
     if criticos.empty:
         report += "Neste recorte, nenhuma LT está matematicamente em DELAY pelo ETA.\n"
-        report += "Os ETAs más próximos ainda têm margem suficiente, mas há algumas situações que exigem cobrança preventiva.\n\n"
+        report += "Os ETAs mais próximos ainda têm margem suficiente, mas há algumas situações que exigem cobrança preventiva.\n\n"
     else:
         for _, row in criticos.iterrows():
             report += f"⚠️ **{row['LT_Short']} — {row['Motorista']}**\n"
@@ -200,6 +197,10 @@ def generate_report_text(df):
                 report += f"Parado há {row['Tempo_Str']}\n"
             
             if row['Motivo_Parada']: report += f"{row['Motivo_Parada']}\n"
+            
+            if row['Sem_Sinal']:
+                report += f"A última atualização do veículo foi em {row['Ultima_Atualizacao_Str']}, portanto a comunicação merece atenção.\n"
+                
             report += f"Análise de Risco: {row['Motivo_Risco']}\n"
             
             report += "Ação: "
@@ -235,7 +236,7 @@ def generate_report_text(df):
     report += "🎯 **PLANO DE AÇÃO IMEDIATO**\n"
     report += "🔴 **Cobrar agora**\n"
     for _, row in df[df["Sem_Sinal"] == True].iterrows():
-        report += f"- {row['LT_Short']} → verificar comunicação/posicionamento; timestamp muito antigo.\n"
+        report += f"- {row['LT_Short']} → verificar comunicação/posicionamento; a última atualização do veículo foi em {row['Ultima_Atualizacao_Str']}.\n"
     for _, row in df[(df["Status_Movimento"] == "Parado") & (df["Tempo_Horas"] >= 4.0)].iterrows():
         report += f"- {row['LT_Short']} → cobrar retomada após mais de {row['Tempo_Str']} parado.\n"
     

@@ -186,7 +186,7 @@ def process_data_local(text, data_trabalho_str):
         data["UF"] = extract_uf(data["Destino"])
                 
         for line in lines:
-            if any(kw in line for kw in ['Parada', 'Retenção', 'Acidente', 'Problema', 'Mudança', 'Manutenção', 'Trânsito', 'aderência', 'antecipada']):
+            if any(kw in line for kw in ['Parada', 'Retenção', 'Acidente', 'Problema', 'Mudança', 'Manutenção', 'Trânsito', 'aderência', 'antecipada', 'documentação']):
                 data["Motivo_Parada"] = line
                 break
                 
@@ -228,20 +228,34 @@ def process_data_local(text, data_trabalho_str):
             tempo_disp_min = (eta_dt - agora_br).total_seconds() / 60
             data["Margem_Minutos"] = int(tempo_disp_min - data["Distancia_Corrigida"])
             
+            # PASSO 5 & 6: DECISÃO OPERACIONAL (DELAY vs TENDÊNCIA vs NORMAL)
             if data["Margem_Minutos"] < 0:
+                # DELAY MATEMÁTICO
                 data["Status_Operacional"] = "Delay"
                 data["Classificacao_Desempenho"] = "Delay"
-                data["Motivo_Risco"] = f"Déficit matemático de {abs(data['Margem_Minutos'])} min em relação ao ETA."
+                data["Motivo_Risco"] = f"Déficit matemático de {abs(data['Margem_Minutos'])} min em relação ao ETA (60 km/h)."
             else:
+                # ETA É VIÁVEL! Vamos testar os critérios de TENDÊNCIA DE ATRASO baseados em comportamento e contexto:
                 sinais_deterioracao = False
                 motivos = []
+                
+                # 1. Parada relevante (ex: parado há mais de 30 min)
                 if data["Status_Movimento"] == "Parado" and data["Tempo_Horas"] >= 0.5:
                     sinais_deterioracao = True
-                    motivos.append(f"Parado há {data['Tempo_Str']} ({data['Motivo_Parada'] or 'Sem motivo'})")
+                    motivos.append(f"Parado há {data['Tempo_Str']} ({data['Motivo_Parada'] or 'Parado sem motivo especificado'})")
                 
-                if any(k in data["Motivo_Parada"] for k in ['Retenção', 'Acidente', 'Problema', 'Manutenção', 'Trânsito']):
+                # 2. Ocorrência ativa na rota (retenção fiscal, acidente, quebra, documentação, etc.)
+                if data["Motivo_Parada"] and any(k in data["Motivo_Parada"] for k in ['Retenção', 'Acidente', 'Problema', 'Manutenção', 'Trânsito', 'Fiscal', 'Restrição', 'documentação']):
                     sinais_deterioracao = True
-                    motivos.append(f"Ocorrência: {data['Motivo_Parada']}")
+                    motivos.append(f"Ocorrência ativa: {data['Motivo_Parada']}")
+                
+                # 3. Velocidade criticamente baixa combinada com margem apertada (< 90 min de margem e velocidade < 40 km/h)
+                if data["Margem_Minutos"] < 90 and 0 < data["Velocidade"] < 40:
+                    sinais_deterioracao = True
+                    motivos.append(f"Velocidade reduzida ({data['Velocidade']} km/h) com margem de segurança apertada ({data['Margem_Minutos']} min).")
+                elif data["Velocidade"] <= 10 and data["Status_Movimento"] == "Em trânsito":
+                    sinais_deterioracao = True
+                    motivos.append(f"Velocidade extremamente baixa em trânsito ({data['Velocidade']} km/h).")
 
                 if sinais_deterioracao:
                     data["Status_Operacional"] = "Tendência"
@@ -253,7 +267,7 @@ def process_data_local(text, data_trabalho_str):
         else:
             if data["Sem_Sinal"]:
                 data["Status_Operacional"] = "Tendência"
-                data["Motivo_Risco"] = f"Sem atualização desde {data['Ultima_Atualizacao_Str']}."
+                data["Motivo_Risco"] = f"Sem sinal desde {data['Ultima_Atualizacao_Str']}."
 
         parsed_data.append(data)
         

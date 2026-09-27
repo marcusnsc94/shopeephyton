@@ -481,16 +481,27 @@ if st.session_state["relatorio_gerado"]:
 
     with tab_performance:
         st.markdown("#### 🌐 Performance por Rota (UF) — Filtrado pelo Turno D")
-        st.info(f"ℹ️ Exibindo apenas as LTs com ETA na data do plantão informada: **{data_plantao_str}**.")
-        
+        st.info(
+            f"ℹ️ Exibindo apenas as LTs com ETA dentro do turno (12x36): "
+            f"**19:00 de {data_plantao_str} até 15:00 do dia seguinte**."
+        )
+
+        # --- FILTRO CORRIGIDO: janela real de datetime (19:00 do dia D até 15:00 do dia D+1) ---
+        # Antes comparava apenas a data (.dt.date == data), o que ignorava a hora e,
+        # em caso de erro de parsing, caía silenciosamente para "mostrar tudo" (df.copy()).
         try:
-            dt_inicio_plantao = datetime.strptime(data_plantao_str, "%d/%m/%Y").date()
+            dt_base = datetime.strptime(data_plantao_str, "%d/%m/%Y")
+            inicio_turno = dt_base.replace(hour=19, minute=0, second=0, microsecond=0)
+            fim_turno = inicio_turno + timedelta(hours=20)  # 19:00 -> 15:00 do dia seguinte
+
             df_perf = df[
-                df["ETA_Dt"].notnull() & 
-                (df["ETA_Dt"].dt.date == dt_inicio_plantao)
+                df["ETA_Dt"].notnull() &
+                (df["ETA_Dt"] >= inicio_turno) &
+                (df["ETA_Dt"] < fim_turno)
             ].copy()
-        except:
-            df_perf = df.copy()
+        except ValueError:
+            st.error(f"⚠️ Data de plantão inválida: '{data_plantao_str}'. Use o formato DD/MM/AAAA.")
+            df_perf = df.iloc[0:0].copy()  # vazio — nunca cai para "mostrar tudo"
         
         if not df_perf.empty:
             ufs_disponiveis = sorted(df_perf["UF"].unique())
@@ -521,7 +532,10 @@ if st.session_state["relatorio_gerado"]:
                     fig_uf.update_layout(margin=dict(t=30, b=10, l=10, r=10), height=240)
                     st.plotly_chart(fig_uf, use_container_width=True, key=f"pie_{uf}")
         else:
-            st.warning(f"Nenhuma LT encontrada com ETA na data {data_plantao_str} para o Turno D.")
+            st.warning(
+                f"Nenhuma LT encontrada com ETA entre 19:00 de {data_plantao_str} "
+                f"e 15:00 do dia seguinte (Turno D)."
+            )
 
     with tab_parados:
         st.markdown("#### 🛑 Veículos Parados")

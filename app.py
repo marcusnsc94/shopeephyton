@@ -110,13 +110,9 @@ def process_data_local(text, data_trabalho_str):
     
     try:
         dt_base = datetime.strptime(data_trabalho_str, "%d/%m/%Y")
-        inicio_turno = dt_base.replace(hour=19, minute=0, second=0)
-        fim_turno = inicio_turno + timedelta(hours=20)
+        ano_atual = dt_base.year
     except:
-        inicio_turno = agora_br.replace(hour=19, minute=0, second=0)
-        fim_turno = inicio_turno + timedelta(hours=20)
-
-    ano_atual = inicio_turno.year
+        ano_atual = agora_br.year
 
     for block in blocks:
         if not block.strip().startswith('LT'):
@@ -228,31 +224,25 @@ def process_data_local(text, data_trabalho_str):
             tempo_disp_min = (eta_dt - agora_br).total_seconds() / 60
             data["Margem_Minutos"] = int(tempo_disp_min - data["Distancia_Corrigida"])
             
-            # PASSO 5 & 6: DECISÃO OPERACIONAL (DELAY vs TENDÊNCIA vs NORMAL)
             if data["Margem_Minutos"] < 0:
-                # DELAY MATEMÁTICO
                 data["Status_Operacional"] = "Delay"
                 data["Classificacao_Desempenho"] = "Delay"
                 data["Motivo_Risco"] = f"Déficit matemático de {abs(data['Margem_Minutos'])} min em relação ao ETA (60 km/h)."
             else:
-                # ETA É VIÁVEL! Vamos testar os critérios de TENDÊNCIA DE ATRASO baseados em comportamento e contexto:
                 sinais_deterioracao = False
                 motivos = []
                 
-                # 1. Parada relevante (ex: parado há mais de 30 min)
                 if data["Status_Movimento"] == "Parado" and data["Tempo_Horas"] >= 0.5:
                     sinais_deterioracao = True
-                    motivos.append(f"Parado há {data['Tempo_Str']} ({data['Motivo_Parada'] or 'Parado sem motivo especificado'})")
+                    motivos.append(f"Parado há {data['Tempo_Str']} ({data['Motivo_Parada'] or 'Parado'})")
                 
-                # 2. Ocorrência ativa na rota (retenção fiscal, acidente, quebra, documentação, etc.)
                 if data["Motivo_Parada"] and any(k in data["Motivo_Parada"] for k in ['Retenção', 'Acidente', 'Problema', 'Manutenção', 'Trânsito', 'Fiscal', 'Restrição', 'documentação']):
                     sinais_deterioracao = True
                     motivos.append(f"Ocorrência ativa: {data['Motivo_Parada']}")
                 
-                # 3. Velocidade criticamente baixa combinada com margem apertada (< 90 min de margem e velocidade < 40 km/h)
                 if data["Margem_Minutos"] < 90 and 0 < data["Velocidade"] < 40:
                     sinais_deterioracao = True
-                    motivos.append(f"Velocidade reduzida ({data['Velocidade']} km/h) com margem de segurança apertada ({data['Margem_Minutos']} min).")
+                    motivos.append(f"Velocidade reduzida ({data['Velocidade']} km/h) com margem apertada ({data['Margem_Minutos']} min).")
                 elif data["Velocidade"] <= 10 and data["Status_Movimento"] == "Em trânsito":
                     sinais_deterioracao = True
                     motivos.append(f"Velocidade extremamente baixa em trânsito ({data['Velocidade']} km/h).")
@@ -272,9 +262,6 @@ def process_data_local(text, data_trabalho_str):
         parsed_data.append(data)
         
     df_result = pd.DataFrame(parsed_data)
-    if not df_result.empty and "ETA_Dt" in df_result.columns:
-        df_result = df_result[(df_result["ETA_Dt"].isna()) | ((df_result["ETA_Dt"] >= inicio_turno) & (df_result["ETA_Dt"] <= fim_turno))]
-        
     return df_result
 
 def generate_report_text(df):
@@ -416,7 +403,7 @@ if gerar_btn:
     if raw_text.strip():
         df_parsed = process_data_local(raw_text, data_plantao_str)
         if df_parsed.empty:
-            st.error("⚠️ Nenhum dado válido encontrado para este range de plantão.")
+            st.error("⚠️ Nenhum dado válido encontrado para este texto colado.")
             st.session_state["relatorio_gerado"] = ""
             st.session_state["df_parsed"] = None
         else:
@@ -466,11 +453,28 @@ if st.session_state["relatorio_gerado"]:
         st.text_area("Texto formatado completo:", value=st.session_state["relatorio_gerado"], height=400)
 
     with tab_performance:
-        st.markdown("#### 🌐 Performance por Rota (UF)")
-        ufs_disponiveis = df["UF"].unique()
-        for uf in sorted(ufs_disponiveis):
-            df_uf = df[df["UF"] == uf]
-            st.markdown(f"**{uf}**: {len(df_uf)} LTs | {df_uf['Pacotes'].sum():,} pacotes")
+        st.markdown("#### 🌐 Performance por Rota (UF) e Distribuição de Status")
+        
+        col_p1, col_p2 = st.columns(2)
+        with col_p1:
+            st.markdown("##### Volume e LTs por UF")
+            ufs_disponiveis = df["UF"].unique()
+            for uf in sorted(ufs_disponiveis):
+                df_uf = df[df["UF"] == uf]
+                st.markdown(f"* **{uf}**: {len(df_uf)} LTs | **{df_uf['Pacotes'].sum():,}** pacotes")
+                
+        with col_p2:
+            # Gráfico de Pizza restaurado
+            fig_status = px.pie(
+                df, 
+                names="Status_Operacional", 
+                title="Proporção de Status Operacional",
+                color="Status_Operacional",
+                color_discrete_map={"Normal": "#10b981", "Tendência": "#f59e0b", "Delay": "#dc2626"},
+                hole=0.4
+            )
+            fig_status.update_layout(margin=dict(t=30, b=10, l=10, r=10), height=280)
+            st.plotly_chart(fig_status, use_container_width=True)
 
     with tab_parados:
         st.markdown("#### 🛑 Veículos Parados")

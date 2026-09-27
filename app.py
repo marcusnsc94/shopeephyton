@@ -1,139 +1,127 @@
 import streamlit as st
 import pandas as pd
 import re
+from datetime import datetime
 
-# Configuração da página
-st.set_page_config(page_title="Painel de Monitoramento - Losung", layout="wide")
+st.set_page_config(page_title="Torre de Controle", layout="wide")
 
 st.title("🚛 Torre de Controle - Análise Rápida de LTs")
-st.caption("Cole a tabela do Losung Web para gerar o relatório operacional automatizado.")
+st.markdown("Cole os dados do Losung Web (modo texto) para gerar o relatório operacional.")
 
-# Área de Texto para Copiar e Colar
-dados_brutos = st.text_area(
-    "Cole os dados do Dashboard aqui (Ctrl+A no site -> Ctrl+C -> Ctrl+V aqui):", 
-    height=150,
-    placeholder="Cole o conteúdo da tabela..."
-)
+raw_text = st.text_area("Cole os dados do Dashboard aqui (Ctrl+A no site -> Ctrl+C -> Ctrl+V aqui):", height=200)
 
-def extrair_minutos_sem_sinal(texto_posicionamento):
-    """Calcula minutos desde o último posicionamento do GPS."""
-    if not texto_posicionamento or pd.isna(texto_posicionamento):
-        return 0
-    m = re.search(r'(\d+)\s*h', str(texto_posicionamento).lower())
-    m_min = re.search(r'(\d+)\s*min', str(texto_posicionamento).lower())
+def is_early(sla_str, eta_str):
+    try:
+        if not sla_str or not eta_str or eta_str == '-': return False
+        sla_dt = datetime.strptime(f"{sla_str}/2024", "%d/%m %H:%M/%Y")
+        eta_dt = datetime.strptime(f"{eta_str}/2024", "%d/%m %H:%M/%Y")
+        return eta_dt < sla_dt
+    except:
+        return False
+
+def parse_data(text):
+    blocks = re.split(r'\n(?=LT[0-9A-Z]+\b)', text.strip())
+    parsed_data = []
     
-    horas = int(m.group(1)) if m else 0
-    minutos = int(m_min.group(1)) if m_min else 0
-    
-    return (horas * 60) + minutos
-
-def processar_dados(texto):
-    linhas = [l.strip().split('\t') for l in texto.strip().split('\n') if l.strip()]
-    if not linhas or len(linhas[0]) < 10:
-        linhas = [re.split(r'\s{2,}', l.strip()) for l in texto.strip().split('\n') if l.strip()]
-
-    dados = []
-    for row in linhas:
-        # Trava de segurança: ignora a linha se você copiar o cabeçalho sem querer
-        if len(row) > 0 and "LR TRIP" in str(row[0]).upper():
+    for block in blocks:
+        if not block.strip().startswith('LT'):
             continue
             
-        if len(row) >= 14:
-            lt = row[0]
-            motorista = row[1]
-            status = row[2]
-            origem = row[3]
-            destino = row[4]
-            pacotes_str = re.sub(r'\D', '', row[7]) if len(row) > 7 else '0'
-            pacotes = int(pacotes_str) if pacotes_str else 0
-            
-            proximidade_str = re.sub(r'[^\d,.]', '', row[13]).replace(',', '.') if len(row) > 13 else '0'
-            proximidade = float(proximidade_str) if proximidade_str else 0.0
-            
-            posicionamento = row[14] if len(row) > 14 else ""
-            
-            is_ma = "MA" in destino.upper() or "MARANHAO" in destino.upper() or "MARANHÃO" in destino.upper()
-            fator_correcao = 1.35 if is_ma else 1.25
-            km_corrigido = proximidade * fator_correcao
-            
-            minutos_sem_sinal = extrair_minutos_sem_sinal(posicionamento)
-            
-            dados.append({
-                "LT": lt,
-                "Motorista": motorista,
-                "Status": status,
-                "Origem": origem,
-                "Destino": destino,
-                "Pacotes": pacotes,
-                "Km_Original": proximidade,
-                "Km_Corrigido": round(km_corrigido, 1),
-                "Posicionamento": posicionamento,
-                "Minutos_Sem_Sinal": minutos_sem_sinal
-            })
-    return pd.DataFrame(dados)
-
-if dados_brutos:
-    try:
-        df = processar_dados(dados_brutos)
+        lines = [line.strip() for line in block.split('\n') if line.strip()]
         
-        if df.empty:
-            st.warning("Nenhum dado válido encontrado. Verifique a cópia.")
-        else:
-            df_sem_sinal = df[df['Minutos_Sem_Sinal'] >= 60]
-            df_atrasados = df[df['Status'].str.contains("Atrasa|atrasa", case=False, na=False)]
-            df_tendencia = df[(df['Status'].str.contains("Parado|parado", case=False, na=False)) & 
-                              (~df['LT'].isin(df_atrasados['LT'])) & 
-                              (df['Km_Corrigido'] > 30)]
-
-            df_sp_rj = df[(df['Destino'].str.contains("SP|RJ", case=False, na=False)) & (df['Km_Corrigido'] <= 50)]
-            df_carga_alta = df[df['Pacotes'] >= 6000]
+        data = {
+            "LT": "", "Motorista": "", "Origem": "", "Destino": "",
+            "Previsão (SLA)": "", "ETA": "", "Status": "",
+            "Ignição/Sinal": "", "Motivo da Parada": "", "Early?": "Não"
+        }
+        
+        first_line = lines[0].split('\t')
+        data["LT"] = first_line[0]
+        if len(first_line) > 1:
+            data["Motorista"] = first_line[1]
             
-            st.divider()
+        date_pattern = r'\d{2}/\d{2} \d{2}:\d{2}'
+        
+        for i, line in enumerate(lines):
+            if ('SOC-' in line or 'HUB-' in line or 'LM ' in line) and '\t' in line:
+                parts = line.split('\t')
+                data["Origem"] = parts[0]
+                if len(parts) > 1:
+                    data["Destino"] = parts[1]
+                    
+            if any(kw in line for kw in ['Parada', 'Retenção', 'Acidente', 'Problema', 'Mudança', 'Manutenção', 'Trânsito']):
+                data["Motivo da Parada"] = line
 
-            # PARTE 1
-            st.subheader("🚨 PARTE 1: Plano de Ação Imediato (Resolver em até 15 min)")
-            acoes = []
-            for _, row in df_sem_sinal.iterrows():
-                acoes.append({"LT": row['LT'], "Condutor": row['Motorista'], "O que fazer": "Ligar / Acionar sirene via BRK", "Por quê": f"Sem sinal GPS há {row['Posicionamento']}."})
-            for _, row in df_sp_rj.iterrows():
-                acoes.append({"LT": row['LT'], "Condutor": row['Motorista'], "O que fazer": "Solicitar liberação na base", "Por quê": f"Veículo a {row['Km_Corrigido']} km do destino ({row['Destino']})."})
-            for _, row in df_tendencia.iterrows():
-                acoes.append({"LT": row['LT'], "Condutor": row['Motorista'], "O que fazer": "Cobrar reinício de viagem", "Por quê": f"Parado com {row['Km_Corrigido']} km restantes."})
+            if 'No prazo' in line or 'Atrasado' in line or 'Risco' in line:
+                parts = line.split('\t')
+                data["Status"] = parts[0]
+                if len(parts) > 1:
+                    data["Ignição/Sinal"] = parts[1]
+                
+                if i >= 1:
+                    eta_line = lines[i-1]
+                    if re.match(date_pattern, eta_line):
+                        data["ETA"] = eta_line
+                    elif eta_line == '—':
+                        data["ETA"] = "-"
+                if i >= 2:
+                    sla_line = lines[i-2]
+                    if re.match(date_pattern, sla_line):
+                        data["Previsão (SLA)"] = sla_line
 
-            if acoes:
-                st.table(pd.DataFrame(acoes))
-            else:
-                st.success("Nenhuma ação crítica urgente detectada!")
+        if "Não monitorado" in block or "Sem viagem ativa" in block:
+            data["Ignição/Sinal"] = "Sem Sinal"
 
-            # PARTE 2
-            st.subheader("⏱️ PARTE 2: Atrasos Confirmados e Tendências")
-            col1, col2 = st.columns(2)
-            with col1:
-                st.error(f"🔴 LTs em DELAY ({len(df_atrasados)})")
-                if not df_atrasados.empty: st.dataframe(df_atrasados[['LT', 'Motorista', 'Destino', 'Km_Corrigido']], use_container_width=True)
-            with col2:
-                st.warning(f"🟠 Tendência de Atraso ({len(df_tendencia)})")
-                if not df_tendencia.empty: st.dataframe(df_tendencia[['LT', 'Motorista', 'Destino', 'Km_Corrigido', 'Status']], use_container_width=True)
+        if is_early(data["Previsão (SLA)"], data["ETA"]):
+            data["Early?"] = "Sim 🟢"
 
-            # PARTE 3
-            st.subheader("👁️ PARTE 3: Pontos de Atenção (Monitoramento)")
-            st.markdown("**1. Próximos de SP/RJ (Necessitam Liberação de Portão):**")
-            if not df_sp_rj.empty: st.dataframe(df_sp_rj[['LT', 'Motorista', 'Destino', 'Km_Corrigido']], use_container_width=True)
-            st.markdown("**2. Cargas Críticas (> 6.000 Pacotes):**")
-            if not df_carga_alta.empty: st.dataframe(df_carga_alta[['LT', 'Motorista', 'Destino', 'Pacotes']], use_container_width=True)
+        parsed_data.append(data)
+        
+    return pd.DataFrame(parsed_data)
 
-            # PARTE 4
-            st.subheader("📋 PARTE 4: Listas Rápidas (Para Copiar e Colar)")
-            c_del, c_ten, c_sin = st.columns(3)
-            with c_del:
-                st.markdown("**LTs em DELAY:**")
-                st.code("\n".join(df_atrasados['LT'].tolist()) if not df_atrasados.empty else "Nenhuma", language="text")
-            with c_ten:
-                st.markdown("**LTs com Tendência:**")
-                st.code("\n".join(df_tendencia['LT'].tolist()) if not df_tendencia.empty else "Nenhuma", language="text")
-            with c_sin:
-                st.markdown("**LTs Sem Sinal:**")
-                st.code("\n".join(df_sem_sinal['LT'].tolist()) if not df_sem_sinal.empty else "Nenhuma", language="text")
+if raw_text:
+    df = parse_data(raw_text)
+    
+    if df.empty:
+        st.error("Nenhum dado válido encontrado. Certifique-se de que copiou as LTs corretamente.")
+    else:
+        st.success(f"{len(df)} veículos processados com sucesso!")
+        
+        # --- DASHBOARD DE AÇÃO ---
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric("Total de LTs Lidas", len(df))
+        with col2:
+            st.metric("Veículos Sem Sinal/Desligados", len(df[df["Ignição/Sinal"].isin(["Desligada", "--", "Sem Sinal"])]))
+        with col3:
+            st.metric("Veículos Adiantados (Early)", len(df[df["Early?"] == "Sim 🟢"]))
 
-    except Exception as e:
-        st.error("Erro ao processar. Certifique-se de colar os resultados das colunas certinho.")
+        st.divider()
+
+        # 1. Alertas de Early
+        st.subheader("🟢 Alertas de Early (Chegada Antecipada)")
+        df_early = df[df["Early?"] == "Sim 🟢"]
+        if not df_early.empty:
+            st.dataframe(df_early[["LT", "Motorista", "Origem", "Destino", "Previsão (SLA)", "ETA"]], use_container_width=True)
+        else:
+            st.info("Nenhum veículo adiantado no momento.")
+
+        # 2. Sem Sinal ou Desligados
+        st.subheader("📡 Veículos Sem Sinal ou Ignição Desligada")
+        df_sinal = df[df["Ignição/Sinal"].isin(["Desligada", "--", "Sem Sinal"])]
+        if not df_sinal.empty:
+            st.dataframe(df_sinal[["LT", "Motorista", "Ignição/Sinal", "Motivo da Parada", "Status"]], use_container_width=True)
+        else:
+            st.info("Todos os veículos estão a transmitir corretamente.")
+            
+        # 3. Tendência de Atraso (Ocorrências)
+        st.subheader("⚠️ Ocorrências (Paradas Indevidas/Retenções)")
+        df_atraso = df[(df["Status"] != "No prazo") | (df["Motivo da Parada"] != "")]
+        if not df_atraso.empty:
+            st.dataframe(df_atraso[["LT", "Motorista", "Status", "Motivo da Parada", "Previsão (SLA)"]], use_container_width=True)
+        else:
+            st.info("Nenhuma ocorrência grave registada.")
+            
+        # 4. Tabela Completa
+        with st.expander("Ver Tabela Completa Extraída"):
+            st.dataframe(df, use_container_width=True)

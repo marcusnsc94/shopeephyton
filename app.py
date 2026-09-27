@@ -3,32 +3,78 @@ import pandas as pd
 import re
 from datetime import datetime, timedelta
 
-st.set_page_config(page_title="Gerador de Relatórios - Torre de Controle", layout="wide")
+# --- CONFIGURAÇÃO DA PÁGINA ---
+st.set_page_config(
+    page_title="Torre de Controle — Shopee",
+    page_icon="🚛",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
 
-# --- ESTILIZAÇÃO CSS (Botão Laranja Shopee) ---
+# --- ESTILIZAÇÃO CSS AVANÇADA (UI/UX Sofisticada) ---
 st.markdown(
     """
     <style>
+    /* Estilo Geral de Fundo e Tipografia */
+    .main {
+        background-color: #f8f9fa;
+    }
+    
+    /* Cartões de Métricas (KPIs) */
+    .metric-card {
+        background-color: #ffffff;
+        border: 1px solid #e0e0e0;
+        border-radius: 10px;
+        padding: 20px;
+        box-shadow: 0 4px 6px rgba(0,0,0,0.02);
+        text-align: center;
+        transition: transform 0.2s;
+    }
+    .metric-card:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 6px 12px rgba(238, 77, 45, 0.15);
+        border-color: #ee4d2d;
+    }
+    
+    /* Botão Principal Shopee */
     div.stButton > button {
         background-color: #ee4d2d !important;
         color: white !important;
-        font-weight: bold !important;
+        font-weight: 600 !important;
         border: none !important;
-        border-radius: 6px !important;
+        border-radius: 8px !important;
         width: 100%;
-        padding: 0.6rem 1rem;
+        padding: 0.7rem 1rem;
         font-size: 16px;
+        box-shadow: 0 4px 10px rgba(238, 77, 45, 0.3);
+        transition: all 0.3s ease;
     }
     div.stButton > button:hover {
         background-color: #d73a1d !important;
+        box-shadow: 0 6px 15px rgba(238, 77, 45, 0.4);
         color: white !important;
+    }
+
+    /* Cabeçalhos estilizados */
+    h1, h2, h3 {
+        color: #222222;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    }
+    
+    /* Caixa de texto do relatório */
+    .stTextArea textarea {
+        font-family: 'Courier New', Courier, monospace !important;
+        font-size: 13px !important;
+        background-color: #fafafa !important;
+        border-radius: 8px !important;
+        border: 1px solid #dcdcdc !important;
     }
     </style>
     """,
     unsafe_allow_html=True
 )
 
-# --- FUNÇÕES DE PROCESSAMENTO (Declaradas primeiro) ---
+# --- FUNÇÕES DE PROCESSAMENTO ---
 def parse_duration(time_str):
     try:
         parts = time_str.split(':')
@@ -132,7 +178,6 @@ def process_data_local(text):
                 if i >= 2 and re.match(date_pattern, lines[i-2]):
                     data["SLA"] = lines[i-2]
 
-        # Correção de distância (+30% para MA, +25% para os demais)
         if "MA" in data["Destino"]:
             data["Distancia_Corrigida"] = data["Distancia_Raw"] * 1.30
             data["Fator_Correcao"] = "(MA)"
@@ -140,7 +185,6 @@ def process_data_local(text):
             data["Distancia_Corrigida"] = data["Distancia_Raw"] * 1.25
             data["Fator_Correcao"] = ""
             
-        # --- MOTOR DE ANÁLISE RIGOROSO (Matemática + Comportamento) ---
         eta_dt = parse_eta_to_datetime(data["ETA"], ano_atual)
         if eta_dt and data["Distancia_Raw"] > 0:
             tempo_disp_min = (eta_dt - agora_br).total_seconds() / 60
@@ -304,9 +348,7 @@ def generate_report_text(df):
     else:
         report += "Nenhum\n"
         
-    # --- NOVO GRUPO: VERIFICAR PARADA INDEVIDA ---
     report += "\nVerificar parada indevida:\n"
-    # Condição: Parado há mais de 1h30 (1.5 horas), não chegou ao destino (distância raw > 0 ou não finalizado) e ETA ainda válido (margem >= 0)
     paradas_indevidas = df[(df["Status_Movimento"] == "Parado") & (df["Tempo_Horas"] > 1.5) & (df["Margem_Minutos"] >= 0)].copy()
     if not paradas_indevidas.empty:
         for _, row in paradas_indevidas.iterrows():
@@ -318,35 +360,82 @@ def generate_report_text(df):
     
     return report
 
-# --- INTERFACE DO USUÁRIO (Executada após as funções) ---
-st.title("🚛 Gerador de Relatórios Automatizado - Shopee")
-st.markdown("Cole os dados do Losung Web e clique no botão para gerar o relatório operacional.")
+# --- LAYOUT PRINCIPAL DA APLICAÇÃO ---
+st.markdown("<h1 style='text-align: center; color: #ee4d2d;'>🚛 Torre de Controle — Gerador Inteligente</h1>", unsafe_allow_html=True)
+st.markdown("<p style='text-align: center; color: #666666;'>Monitoramento preditivo, comportamental e logístico de frotas em tempo real.</p>", unsafe_allow_html=True)
+st.markdown("---")
 
 if "relatorio_gerado" not in st.session_state:
     st.session_state["relatorio_gerado"] = ""
 if "df_parsed" not in st.session_state:
     st.session_state["df_parsed"] = None
 
-raw_text = st.text_area("Cole os dados do Dashboard aqui:", height=150)
+# Área de Entrada de Dados na Barra Lateral ou Topo Destacado
+with st.container():
+    st.markdown("### 📥 Entrada de Dados do Dashboard")
+    raw_text = st.text_area("Cole abaixo as informações copiadas do Losung Web:", height=140, placeholder="Cole o texto bruto das LTs aqui...")
+    
+    col_btn1, col_btn2, _ = st.columns([2, 2, 6])
+    with col_btn1:
+        gerar_btn = st.button("Gerar Relatório Analítico")
 
-# Botão Laranja para acionar a geração
-if st.button("Gerar relatório agora!"):
+if gerar_btn:
     if raw_text.strip():
         df_parsed = process_data_local(raw_text)
         if df_parsed.empty:
-            st.error("Nenhum dado válido encontrado. Verifique se copiou corretamente.")
+            st.error("⚠️ Nenhum dado válido encontrado. Verifique o formato do texto copiado.")
             st.session_state["relatorio_gerado"] = ""
             st.session_state["df_parsed"] = None
         else:
             st.session_state["relatorio_gerado"] = generate_report_text(df_parsed)
             st.session_state["df_parsed"] = df_parsed
     else:
-        st.warning("Por favor, cole os dados do dashboard na caixa de texto acima antes de gerar o relatório.")
+        st.warning("⚠️ Insira os dados do painel na caixa de texto antes de prosseguir.")
 
-# Exibir resultado guardado no session_state se existir
+# Se houver relatório gerado, exibe os painéis sofisticados com Abas
 if st.session_state["relatorio_gerado"]:
-    st.success("Dados lidos com sucesso! Relatório atualizado com o grupo 'Verificar parada indevida'.")
-    st.text_area("Copie o texto abaixo (Ctrl+A e Ctrl+C):", value=st.session_state["relatorio_gerado"], height=600)
+    df = st.session_state["df_parsed"]
     
-    with st.expander("Ver base de dados extraída (Para conferência)"):
-        st.dataframe(st.session_state["df_parsed"])
+    st.markdown("<br>", unsafe_allow_html=True)
+    
+    # 📊 Métricas de Resumo em Cards Modernos
+    total_lts = len(df)
+    qtd_delay = len(df[df["Status_Operacional"] == "Delay"])
+    qtd_tendencia = len(df[df["Status_Operacional"] == "Tendência"])
+    qtd_normal = len(df[df["Status_Operacional"] == "Normal"])
+    total_pacotes = df["Pacotes"].sum()
+
+    m1, m2, m3, m4, m5 = st.columns(5)
+    with m1:
+        st.markdown(f"<div class='metric-card'><h4>Total LTs</h4><h2>{total_lts}</h2></div>", unsafe_allow_html=True)
+    with m2:
+        st.markdown(f"<div class='metric-card'><h4>Normal</h4><h2 style='color: #28a745;'>{qtd_normal}</h2></div>", unsafe_allow_html=True)
+    with m3:
+        st.markdown(f"<div class='metric-card'><h4>Tendência</h4><h2 style='color: #ffc107;'>{qtd_tendencia}</h2></div>", unsafe_allow_html=True)
+    with m4:
+        st.markdown(f"<div class='metric-card'><h4>Delay</h4><h2 style='color: #dc3545;'>{qtd_delay}</h2></div>", unsafe_allow_html=True)
+    with m5:
+        st.markdown(f"<div class='metric-card'><h4>Pacotes</h4><h2>{total_pacotes:,}</h2></div>", unsafe_allow_html=True)
+
+    st.markdown("<br>", unsafe_allow_html=True)
+
+    # Abas para Organização Visual
+    tab_relatorio, tab_tabela, tab_top = st.tabs(["📋 Relatório Formatado", "📊 Tabela Analítica & Status", "📦 Top Volumes & Frotas"])
+
+    with tab_relatorio:
+        st.markdown("#### Texto pronto para envio nos canais de comunicação:")
+        st.text_area("Copie o conteúdo abaixo:", value=st.session_state["relatorio_gerado"], height=450)
+        
+    with tab_tabela:
+        st.markdown("#### Detalhamento Completo da Frota Monitorada")
+        if df is not None and not df.empty:
+            # Seleção de colunas amigáveis para exibição
+            display_df = df[["LT_Short", "Motorista", "Pacotes", "Status_Operacional", "Status_Movimento", "Velocidade", "Margem_Minutos", "ETA", "Destino"]].copy()
+            display_df.columns = ["LT", "Motorista", "Pacotes", "Status Op.", "Movimento", "Vel. (km/h)", "Margem (min)", "ETA", "Destino"]
+            st.dataframe(display_df, use_container_width=True, hide_index=True)
+            
+    with tab_top:
+            st.markdown("#### 🏆 Top 5 Maiores Volumes de Carga")
+            top5_view = df.sort_values(by="Pacotes", ascending=False).head(5)[["LT_Short", "Motorista", "Pacotes", "Status_Operacional", "ETA"]]
+            top5_view.columns = ["LT", "Motorista", "Pacotes", "Status Operacional", "ETA"]
+            st.dataframe(top5_view, use_container_width=True, hide_index=True)

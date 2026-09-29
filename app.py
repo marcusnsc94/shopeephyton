@@ -474,14 +474,13 @@ def generate_report_text(df):
 
     # PONTOS DE ATENÇÃO — CONFIRMAR LOCALIZAÇÃO DA BASE (~60km do destino)
     report += "# 📍 PONTOS DE ATENÇÃO — CONFIRMAR LOCALIZAÇÃO DA BASE\n\n"
-    report += f"_LTs em rota a ~{KM_ALERTA_LOCALIZACAO_BASE} km do destino (±{TOLERANCIA_KM_LOCALIZACAO_BASE}km) — envie a localização certa da base pra não errar o local._\n\n"
+    report += f"_LTs em rota a até {KM_ALERTA_LOCALIZACAO_BASE + TOLERANCIA_KM_LOCALIZACAO_BASE} km do destino (mesmo paradas) — envie a localização certa da base pra não errar o local._\n\n"
     proximos_base = df[
         df["Em_Rota"] &
-        (df["Distancia_Raw"] >= KM_ALERTA_LOCALIZACAO_BASE - TOLERANCIA_KM_LOCALIZACAO_BASE) &
         (df["Distancia_Raw"] <= KM_ALERTA_LOCALIZACAO_BASE + TOLERANCIA_KM_LOCALIZACAO_BASE)
     ].copy()
     if proximos_base.empty:
-        report += f"Nenhuma LT a ~{KM_ALERTA_LOCALIZACAO_BASE} km do destino neste recorte.\n\n"
+        report += f"Nenhuma LT a até {KM_ALERTA_LOCALIZACAO_BASE + TOLERANCIA_KM_LOCALIZACAO_BASE} km do destino neste recorte.\n\n"
     else:
         for _, row in proximos_base.iterrows():
             endereco = BASE_ENDERECOS.get(row["Destino"], "⚠️ Endereço não cadastrado — configure em BASE_ENDERECOS no código")

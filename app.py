@@ -323,8 +323,13 @@ def process_data_local(text, data_trabalho_str):
     return df_result
 
 def esta_em_rota(row):
-    """True se a LT ainda não deu chegada no app (só tem ETA programado, sem segundo horário)."""
-    return row["Chegada_Real_Dt"] is None
+    """
+    True se a LT ainda não deu chegada no app (só tem ETA programado, sem segundo horário).
+    Usa pd.isna() em vez de 'is None': depois que a coluna entra num DataFrame, o pandas
+    costuma converter a coluna inteira pra datetime64, e nesse processo o None vira NaT
+    (Not a Time) -- e 'NaT is None' dá False, o que fazia TODA LT parecer "já chegada".
+    """
+    return pd.isna(row["Chegada_Real_Dt"])
 
 def classificar_performance(row):
     """

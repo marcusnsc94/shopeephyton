@@ -98,6 +98,15 @@ def parse_duration(time_str):
         pass
     return "0h00", 0.0
 
+def formatar_duracao(minutos_totais):
+    """Converte um total de minutos em texto 'XXd XXh XXmin' (sem o 'd' quando for menos de 1 dia)."""
+    minutos_totais = abs(int(minutos_totais))
+    dias, resto = divmod(minutos_totais, 24 * 60)
+    horas, minutos = divmod(resto, 60)
+    if dias > 0:
+        return f"{dias:02d}d {horas:02d}h {minutos:02d}min"
+    return f"{horas:02d}h {minutos:02d}min"
+
 def parse_eta_to_datetime(eta_str, ano_atual):
     try:
         if not eta_str or eta_str == '-' or eta_str == '—': return None

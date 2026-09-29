@@ -187,21 +187,24 @@ def process_data_local(text, data_trabalho_str):
         if dist_match:
             data["Distancia_Raw"] = int(dist_match.group(1))
             
-        if "em trânsito há" in block:
+        block_lower = block.lower()
+        if "em trânsito há" in block_lower:
             data["Status_Movimento"] = "Em trânsito"
-        elif "parado há" in block:
+        elif "parado há" in block_lower:
             data["Status_Movimento"] = "Parado"
             
         time_match = re.search(r'(\d{2}:\d{2}:\d{2})', block)
         if time_match:
             data["Tempo_Str"], data["Tempo_Horas"] = parse_duration(time_match.group(1))
             
-        for line in lines:
+        idx_dest = None
+        for idx_linha, line in enumerate(lines):
             if ('SOC-' in line or 'HUB-' in line or 'LM ' in line) and '\t' in line:
                 parts = line.split('\t')
                 data["Origem"] = parts[0]
                 if len(parts) > 1:
                     data["Destino"] = parts[1]
+                idx_dest = idx_linha
                 break
                 
         if not data["Destino"]:
@@ -210,11 +213,29 @@ def process_data_local(text, data_trabalho_str):
                 data["Destino"] = dest_match.group(1)
                 
         data["UF"] = extract_uf(data["Destino"])
-                
-        for line in lines:
-            if any(kw in line for kw in ['Parada', 'Retenção', 'Acidente', 'Problema', 'Mudança', 'Manutenção', 'Trânsito', 'aderência', 'antecipada', 'documentação', 'fiscal']):
-                data["Motivo_Parada"] = line
-                break
+
+        # --- MOTIVO DA OCORRÊNCIA ---
+        # Método principal: posicional. Logo depois da linha de Origem/Destino vem a
+        # linha de contagem (ex.: "1", "7", ou "--" quando não há ocorrência). Quando
+        # não é "--", a linha seguinte é o motivo (texto livre, qualquer que seja),
+        # e a linha depois disso é o total de pacotes. Isso evita depender de uma
+        # lista fixa de palavras-chave que não cobre motivos novos (ex.: "Morosidade
+        # no carregamento").
+        if idx_dest is not None and idx_dest + 1 < len(lines):
+            linha_contagem = lines[idx_dest + 1]
+            if not linha_contagem.startswith('--') and idx_dest + 2 < len(lines):
+                candidata = lines[idx_dest + 2]
+                candidata_limpa = candidata.replace('.', '').replace(',', '')
+                if not candidata_limpa.isdigit():
+                    data["Motivo_Parada"] = candidata
+
+        # Método de reforço (fallback): lista de palavras-chave conhecidas, caso a
+        # posição acima não capture nada (formato de bloco fora do padrão).
+        if not data["Motivo_Parada"]:
+            for line in lines:
+                if any(kw in line for kw in ['Parada', 'Retenção', 'Acidente', 'Problema', 'Mudança', 'Manutenção', 'Trânsito', 'aderência', 'antecipada', 'documentação', 'fiscal']):
+                    data["Motivo_Parada"] = line
+                    break
                 
         date_pattern = r'\d{2}/\d{2} \d{2}:\d{2}'
         dates_found = re.findall(date_pattern, block)

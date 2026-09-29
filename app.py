@@ -12,6 +12,21 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
+# --- PARÂMETROS AJUSTÁVEIS ---
+KM_ALERTA_LOCALIZACAO_BASE = 60      # "pontos de atenção": enviar localização da base quando perto disso
+TOLERANCIA_KM_LOCALIZACAO_BASE = 10  # +-10km ao redor dos 60km
+
+KM_ALERTA_PORTARIA_SP_RJ = 30        # "plano de ação": pedir liberação de portaria quando perto disso (bases SP/RJ)
+TOLERANCIA_KM_PORTARIA = 5           # +-5km ao redor dos 30km
+MINUTOS_PROXIMO_ETA_PORTARIA = 60    # só alerta se faltar até esse tanto de minutos pro ETA
+
+# Endereço de cada base/hub — preencha usando o código que aparece no campo Destino (ex.: "SOC-PE2").
+# Enquanto não estiver cadastrado, o relatório avisa que falta o endereço em vez de inventar um.
+BASE_ENDERECOS = {
+    # "SOC-PE2": "Rua Exemplo, 123 - Cabo de Santo Agostinho/PE, CEP 00000-000",
+    # "SOC-PE4": "Av. Exemplo, 456 - Jaboatão dos Guararapes/PE, CEP 00000-000",
+}
+
 # --- ESTILIZAÇÃO CSS AVANÇADA (UI/UX Corporativa) ---
 st.markdown(
     """
@@ -91,15 +106,29 @@ def parse_eta_to_datetime(eta_str, ano_atual):
         return None
 
 def extract_uf(destino):
-    if not destino: return "OUTROS"
+    """
+    Extrai a UF do código do destino (ex.: SOC-PE2 -> PE, HUB-LAL-01 -> AL, LPA -> PA).
+    Só reconhece a UF quando ela aparece como um token isolado (logo após "-" ou "L",
+    seguida de dígito/hífen/fim de string) -- evita falsos positivos de siglas de UF
+    grudadas no meio de códigos maiores (ex.: um hub hipotético "SOC-CPE-04" não vira "PE").
+    """
+    if not destino:
+        return "OUTROS"
     dest_upper = str(destino).upper()
-    if "LPA" in dest_upper: return "PA"
-    if "LMA" in dest_upper: return "MA"
-    
-    ufs = ["AC", "AL", "AP", "AM", "BA", "CE", "DF", "ES", "GO", "MA", "MT", "MS", "MG", "PA", "PB", "PR", "PE", "PI", "RJ", "RN", "RS", "RO", "RR", "SC", "SP", "SE", "TO"]
-    for uf in ufs:
-        if uf in dest_upper:
-            return uf
+
+    ufs = ["AC", "AL", "AP", "AM", "BA", "CE", "DF", "ES", "GO", "MA", "MT", "MS", "MG",
+           "PA", "PB", "PR", "PE", "PI", "RJ", "RN", "RS", "RO", "RR", "SC", "SP", "SE", "TO"]
+
+    # Padrão "L" + UF (hub local dentro do estado, ex.: LPA = Pará, LMA = Maranhão, LAL = Alagoas)
+    m = re.search(r'(?:^|-)L([A-Z]{2})(?=\d|-|$)', dest_upper)
+    if m and m.group(1) in ufs:
+        return m.group(1)
+
+    # UF isolada logo após o prefixo do tipo de local (ex.: SOC-PE2, SOC-SP8) ou como código direto
+    m = re.search(r'(?:^|-)([A-Z]{2})(?=\d|-|$)', dest_upper)
+    if m and m.group(1) in ufs:
+        return m.group(1)
+
     return "OUTROS"
 
 def process_data_local(text, data_trabalho_str):
@@ -199,11 +228,10 @@ def process_data_local(text, data_trabalho_str):
                     data["Sem_Sinal"] = True
             except: pass
 
-        # --- EXTRAÇÃO CORRIGIDA DE ETA / CHEGADA REAL ---
-        # No texto colado, logo acima da linha de status ("No prazo"/"Atrasado"/"Risco") vem:
+        # --- EXTRAÇÃO DE ETA / CHEGADA REAL ---
+        # Logo acima da linha de status ("No prazo"/"Atrasado"/"Risco") vem:
         #   [i-2] ETA programado (sempre uma data)
         #   [i-1] chegada real (data) OU "—"/"-" se o condutor ainda não deu chegada
-        # Antes esses dois campos estavam invertidos (pegava a chegada como se fosse o ETA).
         for i, line in enumerate(lines):
             if 'No prazo' in line or 'Atrasado' in line or 'Risco' in line:
                 if i >= 1:
@@ -216,7 +244,6 @@ def process_data_local(text, data_trabalho_str):
                     data["ETA"] = lines[i-2]
 
         # Fallback robusto: a primeira data que aparece no bloco é sempre o ETA programado
-        # (independente de variações de layout, a ordem no texto começa por ele)
         if data["ETA"] == "-" and len(dates_found) >= 1:
             data["ETA"] = dates_found[0]
 
@@ -224,7 +251,6 @@ def process_data_local(text, data_trabalho_str):
         data["Chegada_Real_Dt"] = parse_eta_to_datetime(data["Chegada_Real"], ano_atual)
 
         if data["ETA_Dt"] and data["Chegada_Real_Dt"]:
-            # positivo = chegou adiantado em relação ao ETA; negativo = chegou atrasado
             data["Adiantamento_Minutos"] = int((data["ETA_Dt"] - data["Chegada_Real_Dt"]).total_seconds() / 60)
 
         dest_upper = str(data["Destino"]).upper()
@@ -234,9 +260,25 @@ def process_data_local(text, data_trabalho_str):
         else:
             data["Distancia_Corrigida"] = data["Distancia_Raw"] * 1.25
             data["Fator_Correcao"] = ""
-            
+
+        # --- STATUS OPERACIONAL ---
+        # Se a LT já tem chegada real registrada, ela está CONCLUÍDA e sai de qualquer
+        # lista de risco/atraso/plano de ação — só analisamos quem ainda está em rota.
+        ja_chegou = data["Chegada_Real_Dt"] is not None
         eta_dt = data["ETA_Dt"]
-        if eta_dt and data["Distancia_Raw"] > 0:
+
+        if ja_chegou:
+            data["Status_Operacional"] = "Concluído"
+            data["Classificacao_Desempenho"] = "Concluído"
+            if eta_dt:
+                diff_min = int((data["Chegada_Real_Dt"] - eta_dt).total_seconds() / 60)
+                if diff_min > 0:
+                    data["Motivo_Risco"] = f"Chegou {diff_min} min após o ETA programado."
+                elif diff_min < 0:
+                    data["Motivo_Risco"] = f"Chegou {abs(diff_min)} min antes do ETA programado."
+                else:
+                    data["Motivo_Risco"] = "Chegou no horário programado."
+        elif eta_dt and data["Distancia_Raw"] > 0:
             tempo_disp_min = (eta_dt - agora_br).total_seconds() / 60
             data["Margem_Minutos"] = int(tempo_disp_min - data["Distancia_Corrigida"])
             
@@ -280,32 +322,21 @@ def process_data_local(text, data_trabalho_str):
     df_result = pd.DataFrame(parsed_data)
     return df_result
 
+def esta_em_rota(row):
+    """True se a LT ainda não deu chegada no app (só tem ETA programado, sem segundo horário)."""
+    return row["Chegada_Real_Dt"] is None
+
 def classificar_performance(row):
     """
-    Classifica a LT para fins de performance por rota (UF):
-    - Se já chegou (tem Chegada_Real_Dt): compara com o ETA programado.
-        * Chegou depois do ETA -> Delay
-        * Chegou mais de 31 min adiantada, ou motivo indica saída antecipada/
-          falta de aderência ao transit time -> Early
-        * Caso contrário -> No prazo
-    - Se ainda não chegou: usa a projeção matemática de risco (Status_Operacional)
-      pra Delay, e o motivo de ocorrência pra Early (não dá pra medir minutos de
-      adiantamento de quem ainda está em rota).
+    Classifica a LT (já deve estar filtrada para 'em rota' via esta_em_rota) para fins
+    de performance por rota (UF):
+    - Delay: a projeção matemática aponta que ela vai perder o ETA (Status_Operacional == "Delay")
+    - Early: motivo de ocorrência indica saída antecipada / falta de aderência ao transit time
+    - No prazo: tudo o mais
     """
-    motivo = str(row["Motivo_Parada"] or "").lower()
-    chegada_dt = row["Chegada_Real_Dt"]
-    eta_dt = row["ETA_Dt"]
-
-    if chegada_dt and eta_dt:
-        diff_min = (eta_dt - chegada_dt).total_seconds() / 60
-        if diff_min < 0:
-            return "Delay"
-        if diff_min > 31 or "aderência" in motivo or "antecipada" in motivo:
-            return "Early"
-        return "No prazo"
-
     if row["Status_Operacional"] == "Delay":
         return "Delay"
+    motivo = str(row["Motivo_Parada"] or "").lower()
     if "aderência" in motivo or "antecipada" in motivo:
         return "Early"
     return "No prazo"
@@ -328,17 +359,22 @@ def calcular_performance_rota(df_uf):
 def generate_report_text(df):
     agora = datetime.utcnow() - timedelta(hours=3)
     data_hora_str = agora.strftime("%d/%m/%Y · %H:%M")
-    
+
+    df = df.copy()
+    df["Em_Rota"] = df.apply(esta_em_rota, axis=1)
+    df["Minutos_Ate_ETA"] = df["ETA_Dt"].apply(lambda d: (d - agora).total_seconds() / 60 if d else None)
+
     report = f"# MONITORAMENTO OPERACIONAL — {data_hora_str}\n\n"
     report += f"**Total no recorte:** {len(df)} LTs\n"
     report += "**Referência:** ETA oficial = primeiro horário.\n"
     report += "**Velocidade de cálculo:** 60 km/h ≈ 1 km/min.\n"
     report += "**Distância corrigida:** +25% nas rotas gerais; +30% somente para destinos em MA.\n"
-    report += "**Parada programada — intervalo/refeição:** não contabilizada como causa de atraso.\n\n"
+    report += "**Parada programada — intervalo/refeição:** não contabilizada como causa de atraso.\n"
+    report += "**LTs que já deram chegada no app não entram em nenhuma lista de risco/atraso abaixo.**\n\n"
     report += "> **Correção importante:** neste recorte, as rotas para **SOC-PE2/SOC-PE4** são tratadas como rotas de PE, portanto a correção é **+25%**, não +30%.\n\n"
     report += "---\n\n"
     
-    # DELAY / ATRASO
+    # DELAY / ATRASO (Status_Operacional == "Delay" já exclui quem chegou, pois esses viram "Concluído")
     report += "# 🚨 DELAY / ATRASO\n\n"
     criticos = df[(df["Status_Operacional"] == "Delay") & (~df["Sem_Sinal"])].copy()
     if criticos.empty:
@@ -410,6 +446,23 @@ def generate_report_text(df):
         report += f"| {medal} | **{row['LT_Short']}** | {row['Motorista']} | **{row['Pacotes']:,}** | {row['Status_Operacional']} |\n"
     report += "\n---\n\n"
 
+    # PONTOS DE ATENÇÃO — CONFIRMAR LOCALIZAÇÃO DA BASE (~60km do destino)
+    report += "# 📍 PONTOS DE ATENÇÃO — CONFIRMAR LOCALIZAÇÃO DA BASE\n\n"
+    report += f"_LTs em rota a ~{KM_ALERTA_LOCALIZACAO_BASE} km do destino (±{TOLERANCIA_KM_LOCALIZACAO_BASE}km) — envie a localização certa da base pra não errar o local._\n\n"
+    proximos_base = df[
+        df["Em_Rota"] &
+        (df["Distancia_Raw"] >= KM_ALERTA_LOCALIZACAO_BASE - TOLERANCIA_KM_LOCALIZACAO_BASE) &
+        (df["Distancia_Raw"] <= KM_ALERTA_LOCALIZACAO_BASE + TOLERANCIA_KM_LOCALIZACAO_BASE)
+    ].copy()
+    if proximos_base.empty:
+        report += f"Nenhuma LT a ~{KM_ALERTA_LOCALIZACAO_BASE} km do destino neste recorte.\n\n"
+    else:
+        for _, row in proximos_base.iterrows():
+            endereco = BASE_ENDERECOS.get(row["Destino"], "⚠️ Endereço não cadastrado — configure em BASE_ENDERECOS no código")
+            report += f"* **{row['LT_Full']} — {row['Motorista']}** ({row['Distancia_Raw']} km do destino {row['Destino']})\n"
+            report += f"  Enviar localização: {endereco}\n\n"
+    report += "---\n\n"
+
     # PLANO DE AÇÃO IMEDIATO (DINÂMICO E RIGOROSO, BASEADO NO PADRÃO EXIGIDO)
     report += "# 🎯 PLANO DE AÇÃO IMEDIATO\n\n"
     report += "🔴 **COBRAR AGORA**\n\n"
@@ -446,6 +499,25 @@ def generate_report_text(df):
                 detalhes.append(f"Volume: {row['Pacotes']:,} pacotes.")
                 
             report += f"{' '.join(detalhes)}\n\n"
+
+    # SOLICITAR LIBERAÇÃO DE PORTARIA (bases SP/RJ, ~30km do destino, perto do ETA)
+    report += "🚪 **SOLICITAR LIBERAÇÃO DE PORTARIA (bases SP/RJ)**\n\n"
+    report += ("_Confira manualmente antes de acionar: se o veículo estiver parado e for descarregar só mais "
+               "tarde, pule essa LT — o sistema não sabe o horário de descarga combinado._\n\n")
+    portaria_df = df[
+        df["Em_Rota"] &
+        (df["UF"].isin(["SP", "RJ"])) &
+        (df["Distancia_Raw"] >= KM_ALERTA_PORTARIA_SP_RJ - TOLERANCIA_KM_PORTARIA) &
+        (df["Distancia_Raw"] <= KM_ALERTA_PORTARIA_SP_RJ + TOLERANCIA_KM_PORTARIA) &
+        df["Minutos_Ate_ETA"].notnull() &
+        (df["Minutos_Ate_ETA"] <= MINUTOS_PROXIMO_ETA_PORTARIA)
+    ].copy()
+    if portaria_df.empty:
+        report += "Nenhuma LT nessas condições neste recorte.\n\n"
+    else:
+        for _, row in portaria_df.iterrows():
+            minutos = int(row["Minutos_Ate_ETA"])
+            report += f"* **{row['LT_Full']} — {row['Motorista']}** — {row['Distancia_Raw']} km do destino ({row['UF']}), ETA em ~{minutos} min.\n\n"
 
     # RESUMO SIMPLIFICADO
     report += "# RESUMO SIMPLIFICADO\n\n"
@@ -512,24 +584,28 @@ if st.session_state["relatorio_gerado"]:
     qtd_parados = len(df[df["Status_Movimento"] == "Parado"])
     qtd_tendencia = len(df[df["Status_Operacional"] == "Tendência"])
     qtd_delays = len(df[df["Status_Operacional"] == "Delay"])
+    qtd_concluidas = len(df[df["Status_Operacional"] == "Concluído"])
 
-    k1, k2, k3, k4, k5 = st.columns(5)
+    k1, k2, k3, k4, k5, k6 = st.columns(6)
     with k1:
         st.markdown(f"<div class='metric-card'><div class='metric-title'>Total de LTs</div><div class='metric-value'>{total_lts}</div></div>", unsafe_allow_html=True)
     with k2:
-        st.markdown(f"<div class='metric-card'><div class='metric-title'>Veículos no Prazo</div><div class='metric-value' style='color: #10b981;'>{qtd_normal}</div></div>", unsafe_allow_html=True)
+        st.markdown(f"<div class='metric-card'><div class='metric-title'>No Prazo (em rota)</div><div class='metric-value' style='color: #10b981;'>{qtd_normal}</div></div>", unsafe_allow_html=True)
     with k3:
         st.markdown(f"<div class='metric-card'><div class='metric-title'>Veículos Parados</div><div class='metric-value' style='color: #f59e0b;'>{qtd_parados}</div></div>", unsafe_allow_html=True)
     with k4:
         st.markdown(f"<div class='metric-card'><div class='metric-title'>Tendência Atraso</div><div class='metric-value' style='color: #d97706;'>{qtd_tendencia}</div></div>", unsafe_allow_html=True)
     with k5:
         st.markdown(f"<div class='metric-card'><div class='metric-title'>Delays</div><div class='metric-value' style='color: #dc2626;'>{qtd_delays}</div></div>", unsafe_allow_html=True)
+    with k6:
+        st.markdown(f"<div class='metric-card'><div class='metric-title'>Concluídas</div><div class='metric-value' style='color: #64748b;'>{qtd_concluidas}</div></div>", unsafe_allow_html=True)
 
     st.markdown("<br><br>", unsafe_allow_html=True)
 
-    tab_relatorio, tab_performance, tab_parados, tab_tendencia, tab_top10, tab_tabela = st.tabs([
+    tab_relatorio, tab_performance, tab_atrasadas, tab_parados, tab_tendencia, tab_top10, tab_tabela = st.tabs([
         "📋 Relatório Formatado", 
         "🌐 Performance por Rota (UF)",
+        "🔴 LTs Atrasadas",
         "🛑 Veículos Parados", 
         "⚠️ Tendência de Atraso", 
         "📦 Top 10 Volumes", 
@@ -544,11 +620,11 @@ if st.session_state["relatorio_gerado"]:
     with tab_performance:
         st.markdown("#### 🌐 Performance por Rota (UF) — Filtrado pelo Turno D")
         st.info(
-            f"ℹ️ Exibindo apenas as LTs com ETA dentro do turno (12x36): "
-            f"**19:00 de {data_plantao_str} até 15:00 do dia seguinte**."
+            f"ℹ️ Exibindo apenas as LTs **ainda em rota** (sem chegada registrada) com ETA dentro do turno (12x36): "
+            f"**19:00 de {data_plantao_str} até 15:00 do dia seguinte**. LTs que já deram chegada no app não entram nesta análise."
         )
 
-        # --- FILTRO DE JANELA DO TURNO: 19:00 do dia D até 15:00 do dia D+1 ---
+        # --- FILTRO: janela do turno (19:00 -> 15:00 do dia seguinte) + só quem está em rota ---
         try:
             dt_base = datetime.strptime(data_plantao_str, "%d/%m/%Y")
             inicio_turno = dt_base.replace(hour=19, minute=0, second=0, microsecond=0)
@@ -557,15 +633,33 @@ if st.session_state["relatorio_gerado"]:
             df_perf = df[
                 df["ETA_Dt"].notnull() &
                 (df["ETA_Dt"] >= inicio_turno) &
-                (df["ETA_Dt"] < fim_turno)
+                (df["ETA_Dt"] < fim_turno) &
+                df.apply(esta_em_rota, axis=1)
             ].copy()
         except ValueError:
             st.error(f"⚠️ Data de plantão inválida: '{data_plantao_str}'. Use o formato DD/MM/AAAA.")
             df_perf = df.iloc[0:0].copy()  # vazio — nunca cai para "mostrar tudo"
 
         if not df_perf.empty:
-            # Classificação para fins de performance: No prazo / Delay / Early
             df_perf["Classificacao_Performance"] = df_perf.apply(classificar_performance, axis=1)
+
+            total_perf = len(df_perf)
+            qtd_no_prazo_total = len(df_perf[df_perf["Classificacao_Performance"] == "No prazo"])
+            qtd_delay_total = len(df_perf[df_perf["Classificacao_Performance"] == "Delay"])
+            qtd_early_total = len(df_perf[df_perf["Classificacao_Performance"] == "Early"])
+
+            st.markdown("##### 📊 Resumo do Turno (LTs em rota, dentro do range)")
+            r1, r2, r3, r4 = st.columns(4)
+            with r1:
+                st.markdown(f"<div class='metric-card'><div class='metric-title'>Total em Rota</div><div class='metric-value'>{total_perf}</div></div>", unsafe_allow_html=True)
+            with r2:
+                st.markdown(f"<div class='metric-card'><div class='metric-title'>No Prazo</div><div class='metric-value' style='color:#10b981;'>{qtd_no_prazo_total}</div></div>", unsafe_allow_html=True)
+            with r3:
+                st.markdown(f"<div class='metric-card'><div class='metric-title'>Delay</div><div class='metric-value' style='color:#dc2626;'>{qtd_delay_total}</div></div>", unsafe_allow_html=True)
+            with r4:
+                st.markdown(f"<div class='metric-card'><div class='metric-title'>Early</div><div class='metric-value' style='color:#3b82f6;'>{qtd_early_total}</div></div>", unsafe_allow_html=True)
+
+            st.markdown("<br>", unsafe_allow_html=True)
 
             ufs_disponiveis = sorted(df_perf["UF"].unique())
 
@@ -579,6 +673,8 @@ if st.session_state["relatorio_gerado"]:
 
                 st.markdown("---")
                 st.markdown(f"### 📍 Rota: **{uf}**")
+                if len(df_uf) <= 2:
+                    st.caption("⚠️ Amostra pequena (poucas LTs) — a % de performance pode não ser representativa.")
 
                 col_uf1, col_uf2 = st.columns([4, 6])
                 with col_uf1:
@@ -608,21 +704,46 @@ if st.session_state["relatorio_gerado"]:
                     fig_uf.update_layout(margin=dict(t=30, b=10, l=10, r=10), height=240)
                     st.plotly_chart(fig_uf, use_container_width=True, key=f"pie_{uf}")
 
-                # Motivos de ocorrência que impactaram a performance dessa rota (Delay + Early)
-                impactantes = df_uf[df_uf["Classificacao_Performance"].isin(["Delay", "Early"])]
-                motivos_validos = impactantes[impactantes["Motivo_Parada"] != ""]["Motivo_Parada"]
-                if not motivos_validos.empty:
-                    st.markdown("**📋 Motivos de ocorrência que impactaram a performance:**")
-                    contagem = motivos_validos.value_counts()
-                    for motivo, qtd in contagem.items():
-                        st.markdown(f"- {motivo} — `{qtd}` LT(s)")
+                # LTs que não vão chegar dentro do ETA (Delay) e as em Early, com a ocorrência
+                impactantes = df_uf[df_uf["Classificacao_Performance"].isin(["Delay", "Early"])].copy()
+                if not impactantes.empty:
+                    st.markdown("**🚨 LTs que não vão chegar dentro do ETA / impactaram a performance:**")
+                    tabela_impacto = impactantes[
+                        ["LT_Short", "Motorista", "Classificacao_Performance", "Motivo_Parada", "ETA", "Distancia_Raw", "Velocidade"]
+                    ].rename(columns={
+                        "LT_Short": "LT",
+                        "Classificacao_Performance": "Situação",
+                        "Motivo_Parada": "Ocorrência",
+                        "Distancia_Raw": "Distância (km)"
+                    })
+                    tabela_impacto["Ocorrência"] = tabela_impacto["Ocorrência"].replace("", "—")
+                    st.dataframe(tabela_impacto, use_container_width=True, hide_index=True)
                 else:
-                    st.caption("Nenhum motivo de ocorrência registrado para os desvios desta rota.")
+                    st.caption("Nenhuma LT impactou negativamente a performance desta rota.")
         else:
             st.warning(
-                f"Nenhuma LT encontrada com ETA entre 19:00 de {data_plantao_str} "
+                f"Nenhuma LT em rota encontrada com ETA entre 19:00 de {data_plantao_str} "
                 f"e 15:00 do dia seguinte (Turno D)."
             )
+
+    with tab_atrasadas:
+        st.markdown("#### 🔴 LTs Atrasadas")
+        st.caption("Só LTs ainda em rota (sem chegada registrada) — quem já chegou não entra aqui.")
+        df_atrasadas = df[df["Status_Operacional"] == "Delay"]
+        if not df_atrasadas.empty:
+            tabela_atraso = df_atrasadas[
+                ["LT_Short", "Motorista", "UF", "ETA", "Motivo_Parada", "Motivo_Risco", "Pacotes", "Velocidade", "Distancia_Raw"]
+            ].rename(columns={
+                "LT_Short": "LT",
+                "ETA": "ETA Destino",
+                "Motivo_Parada": "Motivo da Ocorrência",
+                "Motivo_Risco": "Detalhe do Atraso",
+                "Distancia_Raw": "Distância (km)"
+            })
+            tabela_atraso["Motivo da Ocorrência"] = tabela_atraso["Motivo da Ocorrência"].replace("", "—")
+            st.dataframe(tabela_atraso, use_container_width=True, hide_index=True)
+        else:
+            st.success("Nenhuma LT atrasada neste recorte.")
 
     with tab_parados:
         st.markdown("#### 🛑 Veículos Parados")
@@ -634,6 +755,7 @@ if st.session_state["relatorio_gerado"]:
 
     with tab_tendencia:
         st.markdown("#### ⚠️ Tendência de Atraso")
+        st.caption("Só LTs ainda em rota — quem já chegou não entra aqui.")
         df_tendencia = df[df["Status_Operacional"] == "Tendência"]
         if not df_tendencia.empty:
             st.dataframe(df_tendencia[["LT_Short", "Motorista", "Pacotes", "ETA", "Motivo_Risco"]], use_container_width=True, hide_index=True)

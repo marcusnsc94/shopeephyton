@@ -659,7 +659,7 @@ if st.session_state["relatorio_gerado"]:
             df_perf = df[
                 df["ETA_Dt"].notnull() &
                 (df["ETA_Dt"] >= inicio_turno) &
-                (df["ETA_Dt"] < fim_turno) &
+                (df["ETA_Dt"] <= fim_turno) &
                 df.apply(esta_em_rota, axis=1)
             ].copy()
         except ValueError:

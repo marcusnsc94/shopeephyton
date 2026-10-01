@@ -327,112 +327,69 @@ def calcular_margem_projetada(row, horizonte_min):
 
 def avaliar_tendencia(data):
     """
-    Nova metodologia:
+    Classifica somente tendências realmente relevantes.
 
-    1. A LT precisa ainda estar matematicamente no prazo.
-    2. A margem atual precisa ser positiva.
-    3. O comportamento atual precisa estar consumindo a margem.
-    4. A projeção considera os próximos 30-60 minutos.
+    Regra operacional:
+    - a LT precisa estar matematicamente no prazo agora;
+    - a projeção de 60 minutos é calculada mantendo o comportamento atual;
+    - só existe tendência quando, ao chegar 60 minutos à frente, a margem
+      ficar apertada (até 30 minutos) ou negativa.
 
-    Não existe regra do tipo:
-        "abaixo de 50 km/h = tendência".
-
-    A pergunta é:
-
-        Se continuar exatamente como está pelos próximos 30-60 minutos,
-        a margem continuará suficiente?
+    Assim, velocidade baixa, parada ou ocorrência isoladamente não criam
+    tendência quando ainda existe folga confortável na projeção.
     """
 
-    margem_atual = float(data["Margem_Minutos"])
+    margem_atual = float(data["Margem_Minutos"] or 0)
 
     if margem_atual <= 0:
         return False, ""
 
-    velocidade = float(data["Velocidade"] or 0)
-
-    parado = (
-        data["Status_Movimento"] == "Parado"
-        and data["Tempo_Horas"] > 0
+    margem_60 = calcular_margem_projetada(
+        data,
+        HORIZONTE_TENDENCIA_MIN
     )
 
-    ocorrencia = ocorrencia_explicada(data["Motivo_Parada"])
-
-    # Velocidade que mantém aproximadamente a margem atual.
-    fator = (
-        FATOR_CORRECAO_MA
-        if data["UF"] == "MA"
-        else FATOR_CORRECAO_GERAL
-    )
-
-    velocidade_de_equilibrio = VELOCIDADE_REFERENCIA_KMH / fator
-
-    comportamento_consumindo_margem = (
-        parado
-        or (
-            velocidade > 0
-            and velocidade < velocidade_de_equilibrio
-        )
-    )
-
-    # Ocorrência sozinha não cria tendência.
-    # Ela ganha peso quando existe parada ou velocidade insuficiente.
-    if not comportamento_consumindo_margem:
+    if margem_60 is None:
         return False, ""
 
-    margem_30 = calcular_margem_projetada(data, 30)
-    margem_60 = calcular_margem_projetada(data, 60)
-
-    if margem_30 is None or margem_60 is None:
+    # Regra única e objetiva: daqui a 60 min a margem precisa estar
+    # apertada. Se ainda houver mais de 30 min de folga, não alertar.
+    if margem_60 > 30:
         return False, ""
 
-    # Se a projeção de 60 min já ultrapassa o limite matemático,
-    # a LT ainda não está em Delay AGORA, mas está caminhando para ele.
-    if margem_60 <= 0:
-        nivel = "CRÍTICA"
-
-    elif margem_30 <= 0:
-        nivel = "CRÍTICA"
-
-    elif margem_60 <= 30:
-        nivel = "MODERADA"
-
-    elif (
-        margem_60 < margem_atual
-        and (
-            margem_atual <= 120
-            or (margem_atual - margem_60) >= 30
-        )
-    ):
-        nivel = "LEVE"
-
-    else:
-        return False, ""
+    nivel = "CRÍTICA" if margem_60 <= 0 else "MODERADA"
 
     detalhes = [
         f"margem atual de {int(margem_atual)} min",
-        f"projeção em 30 min: {int(margem_30)} min",
         f"projeção em 60 min: {int(margem_60)} min"
     ]
 
-    if parado:
-        detalhes.append(
-            f"parado há {data['Tempo_Str']}"
-        )
+    if data["Status_Movimento"] == "Parado" and data["Tempo_Horas"] > 0:
+        detalhes.append(f"parado há {data['Tempo_Str']}")
 
+    velocidade = float(data["Velocidade"] or 0)
     if velocidade > 0:
-        detalhes.append(
-            f"velocidade atual de {int(velocidade)} km/h"
-        )
-
-    if ocorrencia:
-        detalhes.append(
-            f"ocorrência: {data['Motivo_Parada']}"
-        )
+        detalhes.append(f"velocidade atual de {int(velocidade)} km/h")
 
     return (
         True,
         f"[TENDÊNCIA {nivel}] " + " | ".join(detalhes) + "."
     )
+
+
+def motivo_para_exibicao(motivo):
+    """Texto usado nas áreas de atraso/relatório.
+
+    A parada programada de intervalo/refeição não é apresentada como
+    justificativa final de atraso: ela passa a exigir investigação da causa.
+    """
+
+    motivo = str(motivo or "").strip()
+
+    if motivo_eh_neutro(motivo):
+        return "PROCURAR RAZÃO DO ATRASO"
+
+    return motivo or "—"
 
 
 # ============================================================
@@ -1183,825 +1140,287 @@ def process_data_local(text, data_trabalho_str):
 # ============================================================
 
 def generate_report_text(df):
+    """Gera o relatório operacional em linguagem direta e organizada."""
 
     agora = agora_brasilia()
-
-    data_hora_str = agora.strftime(
-        "%d/%m/%Y · %H:%M"
-    )
+    data_hora_str = agora.strftime("%d/%m/%Y · %H:%M")
 
     df = df.copy()
 
-    df["Em_Rota"] = df.apply(
-        esta_em_rota,
-        axis=1
-    )
-
+    df["Em_Rota"] = df.apply(esta_em_rota, axis=1)
     df["Minutos_Ate_ETA"] = df["ETA_Dt"].apply(
-        lambda d:
-            (d - agora).total_seconds() / 60
-            if pd.notna(d)
-            else None
+        lambda d: (d - agora).total_seconds() / 60 if pd.notna(d) else None
     )
 
-    report = (
-        f"# MONITORAMENTO OPERACIONAL — "
-        f"{data_hora_str}\n\n"
-    )
+    report = f"# Monitoramento Operacional — {data_hora_str}\n\n"
+    report += f"Total no recorte: {len(df)} LTs.\n\n"
 
-    report += (
-        f"**Total no recorte:** {len(df)} LTs\n"
-    )
+    report += "## Como o sistema está avaliando as LTs\n\n"
+    report += "• ETA oficial: considerado somente o primeiro horário informado.\n"
+    report += "• Cálculo de deslocamento: 60 km/h, aproximadamente 1 km por minuto.\n"
+    report += "• Distância corrigida: +25% nas rotas gerais e +35% nas rotas para MA.\n"
+    report += "• Delay: ETA já vencido ou margem matemática igual/menor que zero.\n"
+    report += "• Tendência: somente quando a projeção de 60 minutos deixa a margem em até 30 minutos ou negativa.\n"
+    report += "• Parada programada de intervalo/refeição não é aceita como justificativa final de atraso; nesses casos, o relatório pede investigação da razão real.\n\n"
 
-    report += (
-        "**Referência:** ETA oficial = primeiro horário.\n"
-    )
-
-    report += (
-        "**Velocidade de cálculo:** "
-        "60 km/h ≈ 1 km/min.\n"
-    )
-
-    report += (
-        "**Distância corrigida:** "
-        "+25% nas rotas gerais; +35% para MA.\n"
-    )
-
-    report += (
-        "**Tendência:** somente quando a margem ainda é "
-        "positiva e o comportamento atual está consumindo "
-        "essa margem.\n"
-    )
-
-    report += (
-        "**Parada programada — intervalo/refeição:** "
-        "não gera atraso sozinha; seu impacto é avaliado "
-        "pela margem disponível.\n"
-    )
-
-    report += (
-        "**LTs já chegadas:** excluídas das listas "
-        "operacionais de risco.\n\n"
-    )
-
-    report += "---\n\n"
-
-    # ========================================================
+    # --------------------------------------------------------
     # DELAY
-    # ========================================================
-
-    report += "# 🚨 DELAY / ATRASO\n\n"
+    # --------------------------------------------------------
+    report += "## 🚨 LTs em Delay\n\n"
 
     criticos = df[
-        (df["Status_Operacional"] == "Delay")
-        & (~df["Sem_Sinal"])
+        (df["Status_Operacional"] == "Delay") &
+        (~df["Sem_Sinal"])
     ].copy()
 
     if criticos.empty:
-
-        report += (
-            "Nenhuma LT em delay neste recorte.\n\n"
-        )
-
+        report += "Nenhuma LT está em Delay neste recorte.\n\n"
     else:
-
         for _, row in criticos.iterrows():
-
-            report += (
-                f"## 🔴 {row['LT_Full']} — "
-                f"{row['Motorista']}\n\n"
-            )
-
-            report += (
-                f"* **ETA:** {row['ETA']}\n"
-            )
-
-            report += (
-                f"* **Pacotes:** {row['Pacotes']:,}\n"
-            )
-
-            report += (
-                f"* **Distância:** "
-                f"{row['Distancia_Raw']} km → "
-                f"**{row['Distancia_Corrigida']:.0f} km corrigidos**\n"
-            )
-
-            report += (
-                f"* **Velocidade:** "
-                f"{row['Velocidade']} km/h\n"
-            )
+            report += f"### 🔴 {row['LT_Full']} — {row['Motorista']}\n"
+            report += f"ETA: {row['ETA']} | Pacotes: {row['Pacotes']:,} | Distância: {row['Distancia_Raw']} km\n"
+            report += f"Velocidade atual: {row['Velocidade']} km/h.\n"
 
             if row["Status_Movimento"] == "Parado":
-
-                report += (
-                    f"* **Parado:** "
-                    f"{row['Tempo_Str']}\n"
-                )
+                report += f"Está parado há {row['Tempo_Str']}.\n"
 
             if row["Motivo_Parada"]:
+                report += f"Ocorrência: {motivo_para_exibicao(row['Motivo_Parada'])}.\n"
 
-                report += (
-                    f"* **Ocorrência:** "
-                    f"{row['Motivo_Parada']}\n"
-                )
+            report += f"Situação matemática: {row['Motivo_Risco']}\n\n"
 
-            report += (
-                f"* **Cálculo:** "
-                f"{row['Motivo_Risco']}\n\n"
-            )
-
-    # ========================================================
+    # --------------------------------------------------------
     # TENDÊNCIA
-    # ========================================================
-
-    report += (
-        "# ⚠️ TENDÊNCIA DE ATRASO / "
-        "RISCO OPERACIONAL\n\n"
-    )
+    # --------------------------------------------------------
+    report += "## ⚠️ Tendência de atraso\n\n"
 
     riscos_todos = df[
-        (df["Status_Operacional"] == "Tendência")
-        & (~df["Sem_Sinal"])
+        (df["Status_Operacional"] == "Tendência") &
+        (~df["Sem_Sinal"])
     ].copy()
 
-    # Filtro operacional
     riscos = riscos_todos[
-        riscos_todos.apply(
-            deve_alertar_tendencia,
-            axis=1
-        )
+        riscos_todos.apply(deve_alertar_tendencia, axis=1)
     ].copy()
 
     if riscos.empty:
-
-        report += (
-            "Nenhuma tendência de atraso "
-            "que exija alerta neste recorte.\n\n"
-        )
-
+        report += "Nenhuma LT apresenta tendência de atraso relevante neste recorte.\n\n"
     else:
-
         for _, row in riscos.iterrows():
-
-            report += (
-                f"## 🟠 {row['LT_Full']} — "
-                f"{row['Motorista']}\n\n"
-            )
-
-            report += (
-                f"* **Pacotes:** "
-                f"{row['Pacotes']:,}\n"
-            )
-
-            report += (
-                f"* **ETA:** {row['ETA']}\n"
-            )
-
-            report += (
-                f"* **Distância:** "
-                f"{row['Distancia_Raw']} km → "
-                f"**{row['Distancia_Corrigida']:.0f} km corrigidos**\n"
-            )
-
-            report += (
-                f"* **Velocidade:** "
-                f"{row['Velocidade']} km/h\n"
-            )
-
+            report += f"### 🟠 {row['LT_Full']} — {row['Motorista']}\n"
+            report += f"ETA: {row['ETA']} | Pacotes: {row['Pacotes']:,} | Distância: {row['Distancia_Raw']} km\n"
+            report += f"{row['Motivo_Risco']}\n"
             if row["Motivo_Parada"]:
+                report += f"Ocorrência registrada: {motivo_para_exibicao(row['Motivo_Parada'])}.\n"
+            report += "Ação: acompanhar a evolução da margem na próxima atualização.\n\n"
 
-                report += (
-                    f"* **Ocorrência:** "
-                    f"{row['Motivo_Parada']}\n"
-                )
-
-            if row["Motivo_Risco"]:
-
-                report += (
-                    f"* **Evidência:** "
-                    f"{row['Motivo_Risco']}\n\n"
-                )
-
-            report += (
-                "**Ação:** Monitorar evolução da margem "
-                "e do comportamento operacional.\n\n"
-            )
-
-    # ========================================================
+    # --------------------------------------------------------
     # HUB / XPT
-    # ========================================================
-
-    report += (
-        "# 🏭 ATENÇÃO — HUB / XPT\n\n"
-    )
-
-    report += (
-        f"_Para destinos com HUB/XPT no nome, "
-        f"a referência é chegar com pelo menos "
-        f"{MINUTOS_ANTECEDENCIA_HUB_XPT} min de antecedência "
-        f"em relação ao ETA._\n\n"
-    )
+    # --------------------------------------------------------
+    report += "## 🏭 Atenção para HUB / XPT\n\n"
+    report += f"Para destinos com HUB ou XPT no nome, a referência é chegar com pelo menos {MINUTOS_ANTECEDENCIA_HUB_XPT} minutos de antecedência em relação ao ETA.\n\n"
 
     hub_xpt_df = df[
-        df["Em_Rota"]
-        & df["ETA_Dt"].notna()
-        & (df["Distancia_Raw"] > 0)
-        & df["Destino"].apply(destino_eh_hub_xpt)
-        & (
-            df["Margem_Minutos"]
-            < MINUTOS_ANTECEDENCIA_HUB_XPT
-        )
+        df["Em_Rota"] &
+        df["ETA_Dt"].notna() &
+        (df["Distancia_Raw"] > 0) &
+        df["Destino"].apply(destino_eh_hub_xpt) &
+        (df["Margem_Minutos"] < MINUTOS_ANTECEDENCIA_HUB_XPT)
     ].copy()
 
     if hub_xpt_df.empty:
-
-        report += (
-            "Nenhuma LT para HUB/XPT está abaixo "
-            "da antecedência operacional de 1 hora.\n\n"
-        )
-
+        report += "Nenhuma LT para HUB/XPT está abaixo da antecedência operacional de 1 hora.\n\n"
     else:
-
         for _, row in hub_xpt_df.iterrows():
-
             margem = int(row["Margem_Minutos"])
-
             if margem < 0:
-
-                situacao = (
-                    f"já sem margem matemática "
-                    f"({formatar_deficit_tempo(margem)})"
-                )
-
+                situacao = f"já sem margem matemática ({formatar_deficit_tempo(margem)})"
             else:
-
-                situacao = (
-                    f"margem atual de aproximadamente "
-                    f"{margem} min"
-                )
-
-            report += (
-                f"* **{row['LT_Full']} — "
-                f"{row['Motorista']}** — "
-                f"Destino: **{row['Destino']}** — "
-                f"{situacao}.\n"
-            )
-
+                situacao = f"margem atual de aproximadamente {margem} minutos"
+            report += f"• {row['LT_Full']} — {row['Motorista']} | Destino: {row['Destino']} | {situacao}.\n"
         report += "\n"
 
-    report += "---\n\n"
-
-    # ========================================================
+    # --------------------------------------------------------
     # SEM SINAL
-    # ========================================================
-
-    report += "# 🚨 SEM SINAL\n\n"
-
-    sem_sinal_df = df[
-        df["Sem_Sinal"] == True
-    ].copy()
+    # --------------------------------------------------------
+    report += "## 🚨 Sem sinal\n\n"
+    sem_sinal_df = df[df["Sem_Sinal"] == True].copy()
 
     if sem_sinal_df.empty:
-
-        report += (
-            "Nenhum veículo sem sinal.\n\n"
-        )
-
+        report += "Nenhum veículo está sem sinal.\n\n"
     else:
-
         for _, row in sem_sinal_df.iterrows():
+            report += f"• {row['LT_Full']} — {row['Motorista']} | última atualização: {row['Ultima_Atualizacao_Str']}.\n"
+        report += "Ação: localizar o veículo e restabelecer a comunicação.\n\n"
 
-            report += (
-                f"### 🔴 {row['LT_Full']} — "
-                f"{row['Motorista']}\n\n"
-            )
-
-            report += (
-                f"* ETA: {row['ETA']}\n"
-            )
-
-            report += (
-                "* **Sem sinal**\n"
-            )
-
-            report += (
-                f"* Última posição: "
-                f"{row['Ultima_Atualizacao_Str']}\n\n"
-            )
-
-            report += (
-                "**Ação:** Escalar imediatamente "
-                "para localização/comunicação.\n\n"
-            )
-
-    # ========================================================
+    # --------------------------------------------------------
     # PARADOS
-    # ========================================================
-
-    report += (
-        "# 🚨 VEÍCULOS PARADOS — "
-        "RISCO OPERACIONAL\n\n"
-    )
-
-    parados_df = df[
-        df["Status_Movimento"] == "Parado"
-    ].sort_values(
-        by="Tempo_Horas",
-        ascending=False
+    # --------------------------------------------------------
+    report += "## 🛑 Veículos parados\n\n"
+    parados_df = df[df["Status_Movimento"] == "Parado"].sort_values(
+        by="Tempo_Horas", ascending=False
     )
 
     if parados_df.empty:
-
-        report += (
-            "Nenhum veículo parado no momento.\n\n"
-        )
-
+        report += "Nenhum veículo está parado no momento.\n\n"
     else:
-
-        report += (
-            "| LT | Pacotes | Parado | Avaliação |\n"
-        )
-
-        report += (
-            "| --- | ---: | ---: | --- |\n"
-        )
-
+        report += "| LT | Pacotes | Tempo parado | Situação |\n| --- | ---: | ---: | --- |\n"
         for _, row in parados_df.iterrows():
+            motivo = motivo_para_exibicao(row["Motivo_Parada"]) if row["Motivo_Parada"] else "Parado"
+            report += f"| {row['LT_Full']} | {row['Pacotes']:,} | {row['Tempo_Str']} | {row['Status_Operacional']} — {motivo} |\n"
+        report += "\n"
 
-            report += (
-                f"| **{row['LT_Full']}** | "
-                f"{row['Pacotes']:,} | "
-                f"{row['Tempo_Str']} | "
-                f"{row['Status_Operacional']} - "
-                f"{row['Motivo_Parada'] or 'Parado'} |\n"
-            )
-
-        report += "\n---\n\n"
-
-    # ========================================================
+    # --------------------------------------------------------
     # TOP 5
-    # ========================================================
+    # --------------------------------------------------------
+    report += "## 📦 Top 5 em volume de pacotes\n\n"
+    top5 = df.sort_values(by="Pacotes", ascending=False).head(5)
+    report += "| # | LT | Motorista | Pacotes | Situação |\n| -: | --- | --- | ---: | --- |\n"
+    for i, (_, row) in enumerate(top5.iterrows(), 1):
+        report += f"| {i} | {row['LT_Full']} | {row['Motorista']} | {row['Pacotes']:,} | {row['Status_Operacional']} |\n"
+    report += "\n"
 
-    report += (
-        "# 📦 TOP 5 — MAIOR VOLUME DE PACOTES\n\n"
-    )
-
-    top5 = df.sort_values(
-        by="Pacotes",
-        ascending=False
-    ).head(5)
-
-    report += (
-        "| # | LT | Motorista | Pacotes | Situação |\n"
-    )
-
-    report += (
-        "| -: | --- | --- | ---: | --- |\n"
-    )
-
-    for i, (_, row) in enumerate(
-        top5.iterrows(),
-        1
-    ):
-
-        medal = (
-            "🥇" if i == 1
-            else "🥈" if i == 2
-            else "🥉" if i == 3
-            else str(i)
-        )
-
-        report += (
-            f"| {medal} | **{row['LT_Full']}** | "
-            f"{row['Motorista']} | "
-            f"**{row['Pacotes']:,}** | "
-            f"{row['Status_Operacional']} |\n"
-        )
-
-    report += "\n---\n\n"
-
-    # ========================================================
-    # PONTOS DE ATENÇÃO DA BASE
-    # ========================================================
-
-    report += (
-        "# 📍 PONTOS DE ATENÇÃO — "
-        "CONFIRMAR LOCALIZAÇÃO DA BASE\n\n"
-    )
-
-    report += (
-        f"_LTs em rota a até "
-        f"{KM_ALERTA_LOCALIZACAO_BASE + TOLERANCIA_KM_LOCALIZACAO_BASE} "
-        f"km do destino._\n\n"
-    )
-
+    # --------------------------------------------------------
+    # PONTOS PRÓXIMOS DA BASE
+    # --------------------------------------------------------
+    report += "## 📍 LTs próximas do destino / base\n\n"
     proximos_base = df[
-        df["Em_Rota"]
-        & (
-            df["Distancia_Raw"]
-            <= KM_ALERTA_LOCALIZACAO_BASE
-            + TOLERANCIA_KM_LOCALIZACAO_BASE
-        )
+        df["Em_Rota"] &
+        (df["Distancia_Raw"] <= KM_ALERTA_LOCALIZACAO_BASE + TOLERANCIA_KM_LOCALIZACAO_BASE)
     ].copy()
 
     if proximos_base.empty:
-
-        report += (
-            "Nenhuma LT próxima da base "
-            "neste recorte.\n\n"
-        )
-
+        report += "Nenhuma LT está dentro do raio de atenção da base neste recorte.\n\n"
     else:
-
         for _, row in proximos_base.iterrows():
-
-            endereco = BASE_ENDERECOS.get(
-                row["Destino"]
-            )
-
-            report += (
-                f"* **{row['LT_Full']} — "
-                f"{row['Motorista']}** "
-                f"({row['Distancia_Raw']} km do destino "
-                f"{row['Destino']})\n"
-            )
-
+            endereco = BASE_ENDERECOS.get(row["Destino"])
+            texto = f"• {row['LT_Full']} — {row['Motorista']} | {row['Distancia_Raw']} km do destino {row['Destino']}."
             if endereco:
-
-                report += (
-                    f"  Enviar localização: "
-                    f"{endereco}\n\n"
-                )
-
+                texto += f" Local da base: {endereco}."
             else:
+                texto += " Confirmar com o condutor o local correto da base."
+            report += texto + "\n"
+        report += "\n"
 
-                report += (
-                    f"  Alertar o condutor sobre "
-                    f"o local correto da base "
-                    f"{row['Destino']}.\n\n"
-                )
-
-    report += "---\n\n"
-
-    # ========================================================
+    # --------------------------------------------------------
     # PLANO DE AÇÃO
-    # ========================================================
-
-    report += (
-        "# 🎯 PLANO DE AÇÃO IMEDIATO\n\n"
-    )
-
     # --------------------------------------------------------
-    # COBRAR AGORA
-    # --------------------------------------------------------
-
-    report += (
-        "🔴 **COBRAR AGORA**\n\n"
-    )
+    report += "## 🎯 Plano de ação imediato\n\n"
 
     delays_alertaveis = criticos[
-        criticos.apply(
-            deve_alertar_tendencia,
-            axis=1
-        )
+        criticos.apply(deve_alertar_tendencia, axis=1)
     ].copy()
 
     tendencias_alertaveis = riscos_todos[
-        riscos_todos.apply(
-            deve_alertar_tendencia,
-            axis=1
-        )
-        & (
-            (riscos_todos["Margem_Minutos"] <= 30)
-            | (
-                riscos_todos["Tempo_Horas"]
-                >= LIMIAR_PARADO_LONGO_HORAS
-            )
-        )
-    ].copy()
-
-    sem_sinal_alerta = df[
-        df["Sem_Sinal"] == True
+        riscos_todos.apply(deve_alertar_tendencia, axis=1)
     ].copy()
 
     urgentes = pd.concat(
-        [
-            delays_alertaveis,
-            sem_sinal_alerta,
-            tendencias_alertaveis
-        ],
+        [delays_alertaveis, sem_sinal_df, tendencias_alertaveis[
+            (tendencias_alertaveis["Margem_Minutos"] <= 30) |
+            (tendencias_alertaveis["Tempo_Horas"] >= LIMIAR_PARADO_LONGO_HORAS)
+        ]],
         ignore_index=True
-    ).drop_duplicates(
-        subset=["LT_Full"]
-    )
+    ).drop_duplicates(subset=["LT_Full"])
 
+    report += "### 🔴 Cobrar agora\n\n"
     if urgentes.empty:
-
-        report += (
-            "Nenhuma unidade exige cobrança imediata "
-            "neste recorte.\n\n"
-        )
-
+        report += "Nenhuma unidade exige cobrança imediata.\n\n"
     else:
-
-        for idx, (_, row) in enumerate(
-            urgentes.iterrows(),
-            1
-        ):
-
-            motorista_nome = (
-                row["Motorista"]
-                if row["Motorista"]
-                and row["Motorista"] != "-"
-                else "CONDUTOR NÃO IDENTIFICADO"
-            )
-
-            report += (
-                f"{idx}. **{row['LT_Full']} — "
-                f"{motorista_nome}**\n"
-            )
-
+        for _, row in urgentes.iterrows():
             detalhes = []
-
             if row["Sem_Sinal"]:
-
-                detalhes.append(
-                    f"Sem sinal desde "
-                    f"{row['Ultima_Atualizacao_Str']}."
-                )
-
-            if row["Margem_Minutos"] != 999:
-
-                if row["Margem_Minutos"] <= 0:
-
-                    detalhes.append(
-                        "Já em DELAY matemático "
-                        f"({formatar_deficit_tempo(row['Margem_Minutos'])})"
-                    )
-
-                else:
-
-                    detalhes.append(
-                        f"Margem de aproximadamente "
-                        f"**{row['Margem_Minutos']} min**."
-                    )
-
-            if row["Velocidade"] > 0:
-
-                detalhes.append(
-                    f"Velocidade atual: "
-                    f"{row['Velocidade']} km/h."
-                )
-
-            if row["Status_Movimento"] == "Parado":
-
-                detalhes.append(
-                    f"Parado há {row['Tempo_Str']}."
-                )
-
+                detalhes.append(f"sem sinal desde {row['Ultima_Atualizacao_Str']}")
+            elif row["Status_Operacional"] == "Delay":
+                detalhes.append(row["Motivo_Risco"] or "em Delay")
+            else:
+                detalhes.append(row["Motivo_Risco"] or "margem apertada na projeção de 60 minutos")
             if row["Motivo_Parada"]:
+                detalhes.append(f"ocorrência: {motivo_para_exibicao(row['Motivo_Parada'])}")
+            report += f"• {row['LT_Full']} — {row['Motorista']}: " + "; ".join(detalhes) + ".\n"
+        report += "\n"
 
-                detalhes.append(
-                    f"Ocorrência/Motivo: "
-                    f"{row['Motivo_Parada']}."
-                )
-
-            if row["Pacotes"] > 0:
-
-                detalhes.append(
-                    f"Volume: "
-                    f"{row['Pacotes']:,} pacotes."
-                )
-
-            report += (
-                " ".join(detalhes)
-                + "\n\n"
-            )
-
-    # --------------------------------------------------------
-    # MONITORAR 30 MIN
-    # --------------------------------------------------------
-
-    report += (
-        "🟠 **MONITORAR NOS PRÓXIMOS 30 MINUTOS**\n\n"
-    )
-
-    monitorar = riscos_todos[
-        riscos_todos.apply(
-            deve_alertar_tendencia,
-            axis=1
-        )
-        & (
-            riscos_todos["Margem_Minutos"] > 30
-        )
-        & (
-            riscos_todos["Margem_Minutos"] <= 120
-        )
+    report += "### 🟠 Monitorar nos próximos 30 minutos\n\n"
+    monitorar = tendencias_alertaveis[
+        ~tendencias_alertaveis["LT_Full"].isin(urgentes["LT_Full"])
     ].copy()
-
     if monitorar.empty:
-
-        report += (
-            "Nenhuma LT adicional exige "
-            "monitoramento intensivo nos próximos 30 minutos.\n\n"
-        )
-
+        report += "Nenhuma LT adicional exige acompanhamento intensivo nos próximos 30 minutos.\n\n"
     else:
-
         for _, row in monitorar.iterrows():
-
-            report += (
-                f"* **{row['LT_Full']} — "
-                f"{row['Motorista']}** — "
-                f"margem de aproximadamente "
-                f"{row['Margem_Minutos']} min"
-            )
-
-            if row["Motivo_Parada"]:
-
-                report += (
-                    f" — {row['Motivo_Parada']}"
-                )
-
-            report += ".\n"
-
+            report += f"• {row['LT_Full']} — {row['Motorista']} | projeção de margem em 60 minutos: {int(calcular_margem_projetada(row, 60) or 0)} min.\n"
         report += "\n"
 
-    # --------------------------------------------------------
-    # ESCALAR SE NÃO HOUVER EVOLUÇÃO
-    # --------------------------------------------------------
-
-    report += (
-        "🟡 **ESCALAR SE NÃO HOUVER EVOLUÇÃO**\n\n"
-    )
-
+    report += "### 🟡 Escalar se não houver evolução\n\n"
     escalar = df[
-        df["Em_Rota"]
-        & (
-            (
-                df["Status_Movimento"] == "Parado"
-            )
-            | (
-                df["Sem_Sinal"] == True
-            )
-        )
-        & (
-            df["Tempo_Horas"] >= 1
-        )
+        df["Em_Rota"] &
+        (df["Status_Movimento"] == "Parado") &
+        (df["Tempo_Horas"] >= 1)
     ].copy()
-
     escalar = escalar[
-        escalar.apply(
-            deve_alertar_tendencia,
-            axis=1
-        )
-    ].drop_duplicates(
-        subset=["LT_Full"]
-    )
-
+        ~escalar["LT_Full"].isin(urgentes["LT_Full"])
+    ]
     if escalar.empty:
-
-        report += (
-            "Nenhuma unidade adicional "
-            "nesta condição.\n\n"
-        )
-
+        report += "Nenhuma unidade adicional está nesta condição.\n\n"
     else:
-
         for _, row in escalar.iterrows():
-
-            report += (
-                f"* **{row['LT_Full']} — "
-                f"{row['Motorista']}** — "
-                f"{row['Tempo_Str']} de condição operacional.\n"
-            )
-
+            report += f"• {row['LT_Full']} — {row['Motorista']} | parado há {row['Tempo_Str']}.\n"
         report += "\n"
 
-    # --------------------------------------------------------
-    # SEM NECESSIDADE DE AÇÃO
-    # --------------------------------------------------------
-
-    report += (
-        "🟢 **SEM NECESSIDADE DE AÇÃO**\n\n"
-    )
-
+    report += "### 🟢 Sem necessidade de ação\n\n"
     normais = df[
-        df["Em_Rota"]
-        & (
-            df["Status_Operacional"] == "Normal"
-        )
-        & (~df["Sem_Sinal"])
+        df["Em_Rota"] &
+        (df["Status_Operacional"] == "Normal") &
+        (~df["Sem_Sinal"])
     ]
-
-    if normais.empty:
-
-        report += (
-            "Nenhuma LT classificada "
-            "sem necessidade de ação.\n\n"
-        )
-
-    else:
-
-        report += (
-            f"{len(normais)} LT(s) em condição "
-            "normal no momento.\n\n"
-        )
+    report += f"{len(normais)} LT(s) estão em condição normal no momento.\n\n"
 
     # --------------------------------------------------------
     # PORTARIA SP/RJ
     # --------------------------------------------------------
-
-    report += (
-        "🚪 **SOLICITAR LIBERAÇÃO DE PORTARIA "
-        "(bases SP/RJ)**\n\n"
-    )
-
-    report += (
-        "_Confira manualmente antes de acionar: "
-        "se o veículo estiver parado e for descarregar "
-        "só mais tarde, pule essa LT._\n\n"
-    )
+    report += "### 🚪 Solicitar liberação de portaria — SP/RJ\n\n"
+    report += "Acionar somente quando o veículo estiver próximo do destino e realmente precisar da liberação.\n\n"
 
     portaria_df = df[
-        df["Em_Rota"]
-        & df["UF"].isin(["SP", "RJ"])
-        & (
-            df["Distancia_Raw"]
-            >= KM_ALERTA_PORTARIA_SP_RJ
-            - TOLERANCIA_KM_PORTARIA
-        )
-        & (
-            df["Distancia_Raw"]
-            <= KM_ALERTA_PORTARIA_SP_RJ
-            + TOLERANCIA_KM_PORTARIA
-        )
-        & df["Minutos_Ate_ETA"].notnull()
-        & (
-            df["Minutos_Ate_ETA"]
-            <= MINUTOS_PROXIMO_ETA_PORTARIA
-        )
+        df["Em_Rota"] &
+        df["UF"].isin(["SP", "RJ"]) &
+        (df["Distancia_Raw"] >= KM_ALERTA_PORTARIA_SP_RJ - TOLERANCIA_KM_PORTARIA) &
+        (df["Distancia_Raw"] <= KM_ALERTA_PORTARIA_SP_RJ + TOLERANCIA_KM_PORTARIA) &
+        df["Minutos_Ate_ETA"].notnull() &
+        (df["Minutos_Ate_ETA"] <= MINUTOS_PROXIMO_ETA_PORTARIA)
     ].copy()
 
     if portaria_df.empty:
-
-        report += (
-            "Nenhuma LT nessas condições "
-            "neste recorte.\n\n"
-        )
-
+        report += "Nenhuma LT está neste intervalo neste recorte.\n\n"
     else:
-
         for _, row in portaria_df.iterrows():
+            report += f"• {row['LT_Full']} — {row['Motorista']} | {row['Distancia_Raw']} km do destino | ETA em aproximadamente {int(row['Minutos_Ate_ETA'])} min.\n"
+        report += "\n"
 
-            minutos = int(
-                row["Minutos_Ate_ETA"]
-            )
-
-            report += (
-                f"* **{row['LT_Full']} — "
-                f"{row['Motorista']}** — "
-                f"{row['Distancia_Raw']} km do destino "
-                f"({row['UF']}), ETA em ~{minutos} min.\n\n"
-            )
-
-    # ========================================================
-    # RESUMO SIMPLIFICADO
-    # ========================================================
-
-    report += (
-        "# RESUMO SIMPLIFICADO\n\n"
-    )
-
-    report += "```text\n"
-
+    # --------------------------------------------------------
+    # RESUMO
+    # --------------------------------------------------------
+    report += "## Resumo simplificado\n\n"
     report += "Delay:\n"
-
-    for _, row in criticos.iterrows():
-
-        report += (
-            f"{row['LT_Full']}\n"
-        )
+    if criticos.empty:
+        report += "Nenhuma LT.\n"
+    else:
+        for _, row in criticos.iterrows():
+            report += f"{row['LT_Full']}\n"
 
     report += "\nTendência de atraso:\n"
-
-    for _, row in riscos.iterrows():
-
-        report += (
-            f"{row['LT_Full']}\n"
-        )
+    if riscos.empty:
+        report += "Nenhuma LT.\n"
+    else:
+        for _, row in riscos.iterrows():
+            report += f"{row['LT_Full']}\n"
 
     report += "\nSem sinal:\n"
-
-    for _, row in sem_sinal_df.iterrows():
-
-        report += (
-            f"{row['LT_Full']}\n"
-        )
-
-    report += "----------------\n"
-
-    report += "```\n"
+    if sem_sinal_df.empty:
+        report += "Nenhuma LT.\n"
+    else:
+        for _, row in sem_sinal_df.iterrows():
+            report += f"{row['LT_Full']}\n"
 
     return report
 
@@ -2151,7 +1570,9 @@ if st.session_state["relatorio_gerado"]:
 
     qtd_normal = len(
         df[
-            df["Status_Operacional"] == "Normal"
+            df["Status_Operacional"].isin(
+                ["Normal", "Tendência"]
+            )
         ]
     )
 
@@ -2638,10 +2059,7 @@ if st.session_state["relatorio_gerado"]:
                 "Motivo da Ocorrência"
             ] = tabela_atraso[
                 "Motivo da Ocorrência"
-            ].replace(
-                "",
-                "—"
-            )
+            ].apply(motivo_para_exibicao)
 
             st.dataframe(
                 tabela_atraso,
@@ -2710,6 +2128,13 @@ if st.session_state["relatorio_gerado"]:
 
         df_tendencia = df[
             df["Status_Operacional"] == "Tendência"
+        ].copy()
+
+        df_tendencia = df_tendencia[
+            df_tendencia.apply(
+                deve_alertar_tendencia,
+                axis=1
+            )
         ].copy()
 
         if not df_tendencia.empty:

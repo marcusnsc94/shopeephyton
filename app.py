@@ -20,6 +20,31 @@ KM_ALERTA_PORTARIA_SP_RJ = 30        # "plano de ação": pedir liberação de p
 TOLERANCIA_KM_PORTARIA = 5           # +-5km ao redor dos 30km
 MINUTOS_PROXIMO_ETA_PORTARIA = 60    # só alerta se faltar até esse tanto de minutos pro ETA
 
+# Correção de distância: regra geral +25%; rotas com destino no Maranhão usam +35%
+FATOR_CORRECAO_GERAL = 1.25
+FATOR_CORRECAO_MA = 1.35
+
+# Metodologia de TENDÊNCIA DE ATRASO: tendência = margem pequena + um comportamento
+# que está consumindo essa margem (parado, velocidade baixa, ocorrência ativa).
+# Velocidade baixa ou parada isoladas, com margem folgada, NÃO decretam tendência.
+MARGEM_CRITICA_MIN = 60     # abaixo disso + algum sinal -> TENDÊNCIA CRÍTICA
+MARGEM_MODERADA_MIN = 150   # abaixo disso + algum sinal -> TENDÊNCIA MODERADA
+MARGEM_LEVE_MIN = 240       # abaixo disso + ocorrência ativa ou parada prolongada -> TENDÊNCIA LEVE
+PARADA_PROLONGADA_HORAS = 1.0
+
+# Ocorrências que não contam, por si só, como "razão de atraso já explicada" --
+# ainda precisam do acompanhamento normal de margem (ex.: intervalo/refeição).
+OCORRENCIAS_NEUTRAS = {"Parada programada — intervalo/refeição"}
+
+# Para LTs com uma ocorrência JÁ EXPLICADA (motivo fora da lista acima), só
+# alertamos em Tendência/Plano de Ação se estiverem perto da base ou paradas
+# há muito tempo -- não repetimos o motivo que o operador já conhece.
+LIMIAR_PARADO_LONGO_HORAS = 2.0
+
+# LTs com "hub" ou "xpt" no nome do destino: avisar se não vão conseguir chegar
+# com pelo menos esse tanto de antecedência em relação ao ETA.
+MINUTOS_ANTECEDENCIA_HUB_XPT = 60
+
 # Endereço de cada base/hub — preencha usando o código que aparece no campo Destino (ex.: "SOC-PE2").
 # Enquanto não estiver cadastrado, o relatório avisa que falta o endereço em vez de inventar um.
 BASE_ENDERECOS = {
@@ -107,30 +132,12 @@ def formatar_deficit_tempo(minutos_totais):
         return f"Déficit de {dias:02d}d {horas}h {minutos:02d}min."
     return f"Déficit de {horas:02d}h {minutos:02d}min."
 
-def formatar_duracao(minutos_totais):
-    """Converte um total de minutos em texto 'XXd XXh XXmin' (sem o 'd' quando for menos de 1 dia)."""
-    minutos_totais = abs(int(minutos_totais))
-    dias, resto = divmod(minutos_totais, 24 * 60)
-    horas, minutos = divmod(resto, 60)
-    if dias > 0:
-        return f"{dias:02d}d {horas:02d}h {minutos:02d}min"
-    return f"{horas:02d}h {minutos:02d}min"
-
 def parse_eta_to_datetime(eta_str, ano_atual):
     try:
         if not eta_str or eta_str == '-' or eta_str == '—': return None
         return datetime.strptime(f"{eta_str}/{ano_atual}", "%d/%m %H:%M/%Y")
     except:
         return None
-
-def formatar_duracao(minutos_totais):
-    """Converte um total de minutos em texto 'DDd HHh MMmin' (sem o 'd' quando é menos de 1 dia)."""
-    minutos_totais = abs(int(minutos_totais))
-    dias, resto_min = divmod(minutos_totais, 24 * 60)
-    horas, mins = divmod(resto_min, 60)
-    if dias > 0:
-        return f"{dias:02d}d {horas:02d}h {mins:02d}min"
-    return f"{horas:02d}h {mins:02d}min"
 
 def extract_uf(destino):
     """
@@ -157,6 +164,43 @@ def extract_uf(destino):
         return m.group(1)
 
     return "OUTROS"
+
+def avaliar_tendencia(data):
+    """
+    Decide se uma LT com margem ainda positiva deve ser classificada como
+    TENDÊNCIA DE ATRASO, seguindo a metodologia: tendência = margem pequena +
+    um comportamento que está consumindo essa margem (parado, velocidade baixa,
+    ocorrência ativa). Velocidade baixa ou parada isoladas, com margem folgada,
+    NÃO decretam tendência -- só a combinação dos dois.
+    Retorna (True/False, texto do motivo já formatado com o nível).
+    """
+    margem = data["Margem_Minutos"]
+    motivo = data["Motivo_Parada"]
+    motivo_eh_neutro = (not motivo) or (motivo in OCORRENCIAS_NEUTRAS)
+
+    sinal_parado = data["Status_Movimento"] == "Parado" and data["Tempo_Horas"] > 0
+    sinal_ocorrencia = bool(motivo) and not motivo_eh_neutro
+    sinal_velocidade_baixa = 0 < data["Velocidade"] < 40
+    tem_sinal = sinal_parado or sinal_ocorrencia or sinal_velocidade_baixa
+
+    if margem < MARGEM_CRITICA_MIN and tem_sinal:
+        nivel = "CRÍTICA"
+    elif margem < MARGEM_MODERADA_MIN and tem_sinal:
+        nivel = "MODERADA"
+    elif margem < MARGEM_LEVE_MIN and (sinal_ocorrencia or (sinal_parado and data["Tempo_Horas"] >= PARADA_PROLONGADA_HORAS)):
+        nivel = "LEVE"
+    else:
+        return False, ""
+
+    detalhes = [f"margem de {margem} min"]
+    if sinal_parado:
+        detalhes.append(f"parado há {data['Tempo_Str']}")
+    if sinal_ocorrencia:
+        detalhes.append(f"ocorrência: {motivo}")
+    if sinal_velocidade_baixa:
+        detalhes.append(f"velocidade reduzida ({data['Velocidade']} km/h)")
+
+    return True, f"[TENDÊNCIA {nivel}] " + " | ".join(detalhes) + "."
 
 def process_data_local(text, data_trabalho_str):
     blocks = re.split(r'\n(?=LT[0-9A-Z]+\b)', text.strip())
@@ -301,12 +345,11 @@ def process_data_local(text, data_trabalho_str):
         if data["ETA_Dt"] and data["Chegada_Real_Dt"]:
             data["Adiantamento_Minutos"] = int((data["ETA_Dt"] - data["Chegada_Real_Dt"]).total_seconds() / 60)
 
-        dest_upper = str(data["Destino"]).upper()
-        if "MA" in dest_upper and "SOC-PE" not in dest_upper:
-            data["Distancia_Corrigida"] = data["Distancia_Raw"] * 1.30
-            data["Fator_Correcao"] = "(MA)"
+        if data["UF"] == "MA":
+            data["Distancia_Corrigida"] = data["Distancia_Raw"] * FATOR_CORRECAO_MA
+            data["Fator_Correcao"] = "(MA +35%)"
         else:
-            data["Distancia_Corrigida"] = data["Distancia_Raw"] * 1.25
+            data["Distancia_Corrigida"] = data["Distancia_Raw"] * FATOR_CORRECAO_GERAL
             data["Fator_Correcao"] = ""
 
         # --- STATUS OPERACIONAL ---
@@ -335,28 +378,11 @@ def process_data_local(text, data_trabalho_str):
                 data["Classificacao_Desempenho"] = "Delay"
                 data["Motivo_Risco"] = formatar_deficit_tempo(data["Margem_Minutos"])
             else:
-                sinais_deterioracao = False
-                motivos = []
-                
-                if data["Status_Movimento"] == "Parado" and data["Tempo_Horas"] >= 0.5:
-                    sinais_deterioracao = True
-                    motivos.append(f"Parado há {data['Tempo_Str']} ({data['Motivo_Parada'] or 'Parado'})")
-                
-                if data["Motivo_Parada"] and any(k in data["Motivo_Parada"] for k in ['Retenção', 'Acidente', 'Problema', 'Manutenção', 'Trânsito', 'Fiscal', 'Restrição', 'documentação']):
-                    sinais_deterioracao = True
-                    motivos.append(f"Ocorrência ativa: {data['Motivo_Parada']}")
-                
-                if data["Margem_Minutos"] < 90 and 0 < data["Velocidade"] < 40:
-                    sinais_deterioracao = True
-                    motivos.append(f"Velocidade reduzida ({data['Velocidade']} km/h) com margem apertada ({data['Margem_Minutos']} min).")
-                elif data["Velocidade"] <= 10 and data["Status_Movimento"] == "Em trânsito":
-                    sinais_deterioracao = True
-                    motivos.append(f"Velocidade extremamente baixa em trânsito ({data['Velocidade']} km/h).")
-
-                if sinais_deterioracao:
+                tem_tendencia, texto_motivo = avaliar_tendencia(data)
+                if tem_tendencia:
                     data["Status_Operacional"] = "Tendência"
                     data["Classificacao_Desempenho"] = "No prazo"
-                    data["Motivo_Risco"] = " | ".join(motivos)
+                    data["Motivo_Risco"] = texto_motivo
                 else:
                     data["Status_Operacional"] = "Normal"
                     data["Classificacao_Desempenho"] = "No prazo"
@@ -378,6 +404,21 @@ def esta_em_rota(row):
     (Not a Time) -- e 'NaT is None' dá False, o que fazia TODA LT parecer "já chegada".
     """
     return pd.isna(row["Chegada_Real_Dt"])
+
+def deve_alertar_tendencia(row):
+    """
+    Filtro aplicado só às LTs em TENDÊNCIA (aba Tendência de Atraso / Plano de Ação):
+    LTs com uma ocorrência JÁ EXPLICADA (motivo diferente de "Parada programada —
+    intervalo/refeição") não precisam de alerta repetindo essa explicação -- o
+    operador já sabe a causa. Só entram no alerta se, além disso, estiverem perto
+    da base (prestes a chegar) ou paradas há muito tempo.
+    """
+    motivo = row["Motivo_Parada"] or ""
+    if motivo == "" or motivo in OCORRENCIAS_NEUTRAS:
+        return True
+    perto_da_base = row["Distancia_Raw"] <= (KM_ALERTA_LOCALIZACAO_BASE + TOLERANCIA_KM_LOCALIZACAO_BASE)
+    parado_muito_tempo = row["Status_Movimento"] == "Parado" and row["Tempo_Horas"] >= LIMIAR_PARADO_LONGO_HORAS
+    return perto_da_base or parado_muito_tempo
 
 def classificar_performance(row):
     """

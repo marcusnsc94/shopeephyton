@@ -98,6 +98,15 @@ def parse_duration(time_str):
         pass
     return "0h00", 0.0
 
+def formatar_deficit_tempo(minutos_totais):
+    """Formata um total de minutos como 'Déficit de 06h 32min.' ou 'Déficit de 01d 5h 30min.'"""
+    minutos_totais = int(abs(minutos_totais))
+    dias, resto = divmod(minutos_totais, 24 * 60)
+    horas, minutos = divmod(resto, 60)
+    if dias > 0:
+        return f"Déficit de {dias:02d}d {horas}h {minutos:02d}min."
+    return f"Déficit de {horas:02d}h {minutos:02d}min."
+
 def formatar_duracao(minutos_totais):
     """Converte um total de minutos em texto 'XXd XXh XXmin' (sem o 'd' quando for menos de 1 dia)."""
     minutos_totais = abs(int(minutos_totais))
@@ -113,6 +122,15 @@ def parse_eta_to_datetime(eta_str, ano_atual):
         return datetime.strptime(f"{eta_str}/{ano_atual}", "%d/%m %H:%M/%Y")
     except:
         return None
+
+def formatar_duracao(minutos_totais):
+    """Converte um total de minutos em texto 'DDd HHh MMmin' (sem o 'd' quando é menos de 1 dia)."""
+    minutos_totais = abs(int(minutos_totais))
+    dias, resto_min = divmod(minutos_totais, 24 * 60)
+    horas, mins = divmod(resto_min, 60)
+    if dias > 0:
+        return f"{dias:02d}d {horas:02d}h {mins:02d}min"
+    return f"{horas:02d}h {mins:02d}min"
 
 def extract_uf(destino):
     """
@@ -315,7 +333,7 @@ def process_data_local(text, data_trabalho_str):
             if data["Margem_Minutos"] < 0:
                 data["Status_Operacional"] = "Delay"
                 data["Classificacao_Desempenho"] = "Delay"
-                data["Motivo_Risco"] = f"Déficit matemático de {abs(data['Margem_Minutos'])} min em relação ao ETA (60 km/h)."
+                data["Motivo_Risco"] = formatar_deficit_tempo(data["Margem_Minutos"])
             else:
                 sinais_deterioracao = False
                 motivos = []
@@ -492,9 +510,12 @@ def generate_report_text(df):
         report += f"Nenhuma LT a até {KM_ALERTA_LOCALIZACAO_BASE + TOLERANCIA_KM_LOCALIZACAO_BASE} km do destino neste recorte.\n\n"
     else:
         for _, row in proximos_base.iterrows():
-            endereco = BASE_ENDERECOS.get(row["Destino"], "⚠️ Endereço não cadastrado — configure em BASE_ENDERECOS no código")
+            endereco = BASE_ENDERECOS.get(row["Destino"])
             report += f"* **{row['LT_Full']} — {row['Motorista']}** ({row['Distancia_Raw']} km do destino {row['Destino']})\n"
-            report += f"  Enviar localização: {endereco}\n\n"
+            if endereco:
+                report += f"  Enviar localização: {endereco}\n\n"
+            else:
+                report += f"  Alertar o condutor sobre o local correto da base {row['Destino']}.\n\n"
     report += "---\n\n"
 
     # PLANO DE AÇÃO IMEDIATO (DINÂMICO E RIGOROSO, BASEADO NO PADRÃO EXIGIDO)
@@ -520,7 +541,7 @@ def generate_report_text(df):
                 detalhes.append(f"Sem sinal telemétrico desde {row['Ultima_Atualizacao_Str']}.")
             if row['Margem_Minutos'] != 999:
                 if row['Margem_Minutos'] < 0:
-                    detalhes.append(f"Já em DELAY matemático (déficit de {abs(row['Margem_Minutos'])} min).")
+                    detalhes.append(f"Já em DELAY matemático ({formatar_deficit_tempo(row['Margem_Minutos'])})")
                 else:
                     detalhes.append(f"Margem de aproximadamente **{row['Margem_Minutos']} min**.")
             if row['Velocidade'] > 0:

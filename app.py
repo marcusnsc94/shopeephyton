@@ -1235,6 +1235,19 @@ def process_data_local(text, data_trabalho_str):
 
     df_result = pd.DataFrame(parsed_data)
 
+    # ========================================================
+    # CORTE OPERACIONAL: IGNORAR LTs JÁ CHEGADAS
+    #
+    # Se o campo REALIZADO estiver preenchido, a LT já deu
+    # chegada no app e não deve participar de nenhuma análise.
+    # Ela é removida aqui, antes de relatório, performance,
+    # score cards, tendências, delays e demais abas.
+    # ========================================================
+    if not df_result.empty and "Chegada_Real_Dt" in df_result.columns:
+        df_result = df_result[
+            df_result["Chegada_Real_Dt"].isna()
+        ].copy()
+
     return df_result
 
 
@@ -1759,13 +1772,9 @@ if st.session_state["relatorio_gerado"]:
         ]
     )
 
-    qtd_concluidas = len(
-        df[
-            df["Status_Operacional"] == "Concluído"
-        ]
-    )
-
-    k1, k2, k3, k4, k5, k6 = st.columns(6)
+    # LTs concluídas já foram removidas no processamento dos dados.
+    # Portanto, Total de LTs representa somente as LTs ainda sem chegada.
+    k1, k2, k3, k4, k5 = st.columns(5)
 
     with k1:
 
@@ -1817,17 +1826,6 @@ if st.session_state["relatorio_gerado"]:
             f"<div class='metric-title'>Delays</div>"
             f"<div class='metric-value' style='color: #dc2626;'>"
             f"{qtd_delays}"
-            f"</div></div>",
-            unsafe_allow_html=True
-        )
-
-    with k6:
-
-        st.markdown(
-            f"<div class='metric-card'>"
-            f"<div class='metric-title'>Concluídas</div>"
-            f"<div class='metric-value' style='color: #64748b;'>"
-            f"{qtd_concluidas}"
             f"</div></div>",
             unsafe_allow_html=True
         )
@@ -2163,9 +2161,12 @@ if st.session_state["relatorio_gerado"]:
                         "Ocorrência"
                     ] = tabela_impacto[
                         "Ocorrência"
-                    ].replace(
-                        "",
-                        "—"
+                    ].apply(
+                        lambda motivo: (
+                            "Validar delay"
+                            if motivo_eh_neutro(motivo)
+                            else (str(motivo).strip() or "—")
+                        )
                     )
 
                     st.dataframe(

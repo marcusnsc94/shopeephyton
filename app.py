@@ -153,15 +153,18 @@ def extract_uf(destino):
     ufs = ["AC", "AL", "AP", "AM", "BA", "CE", "DF", "ES", "GO", "MA", "MT", "MS", "MG",
            "PA", "PB", "PR", "PE", "PI", "RJ", "RN", "RS", "RO", "RR", "SC", "SP", "SE", "TO"]
 
-    # Padrão "L" + UF (hub local dentro do estado, ex.: LPA = Pará, LMA = Maranhão, LAL = Alagoas)
-    m = re.search(r'(?:^|-)L([A-Z]{2})(?=\d|-|$)', dest_upper)
-    if m and m.group(1) in ufs:
-        return m.group(1)
+    # Padrão "L" + UF (hub local dentro do estado, ex.: LPA = Pará, LMA = Maranhão, LAL = Alagoas).
+    # Usa finditer (não search) e checa TODAS as ocorrências -- "LM Hub_MA_FX_São Luís_01"
+    # tem "LM" primeiro (não é UF) e só depois "MA"; com search puro a função desistia
+    # no primeiro "LM" e nunca chegava a olhar o "MA" de verdade.
+    for m in re.finditer(r'(?:^|[-_ ])L([A-Z]{2})(?=\d|[-_ ]|$)', dest_upper):
+        if m.group(1) in ufs:
+            return m.group(1)
 
     # UF isolada logo após o prefixo do tipo de local (ex.: SOC-PE2, SOC-SP8) ou como código direto
-    m = re.search(r'(?:^|-)([A-Z]{2})(?=\d|-|$)', dest_upper)
-    if m and m.group(1) in ufs:
-        return m.group(1)
+    for m in re.finditer(r'(?:^|[-_ ])([A-Z]{2})(?=\d|[-_ ]|$)', dest_upper):
+        if m.group(1) in ufs:
+            return m.group(1)
 
     return "OUTROS"
 
@@ -257,16 +260,31 @@ def process_data_local(text, data_trabalho_str):
         if time_match:
             data["Tempo_Str"], data["Tempo_Horas"] = parse_duration(time_match.group(1))
             
+        # Origem/Destino normalmente vêm numa linha só, tabulados: "SOC-PE2\tSOC-SP8".
+        # Mas quando o nome do destino é mais longo (ex.: "LM Hub_MA_FX_São Luís_01"),
+        # o dashboard quebra em duas linhas: a origem sozinha, depois o destino na
+        # linha seguinte. idx_dest sempre aponta pra linha onde o destino foi lido,
+        # pra tudo que vem depois (validação/motivo/pacotes) ficar na posição certa.
         idx_dest = None
         for idx_linha, line in enumerate(lines):
-            if ('SOC-' in line or 'HUB-' in line or 'LM ' in line) and '\t' in line:
+            if not ('SOC-' in line or 'HUB-' in line or 'LM ' in line or 'FMH-' in line):
+                continue
+            if '\t' in line:
                 parts = line.split('\t')
                 data["Origem"] = parts[0]
-                if len(parts) > 1:
+                if len(parts) > 1 and parts[1]:
                     data["Destino"] = parts[1]
-                idx_dest = idx_linha
-                break
-                
+                    idx_dest = idx_linha
+                elif idx_linha + 1 < len(lines):
+                    data["Destino"] = lines[idx_linha + 1]
+                    idx_dest = idx_linha + 1
+            else:
+                data["Origem"] = line
+                if idx_linha + 1 < len(lines):
+                    data["Destino"] = lines[idx_linha + 1]
+                    idx_dest = idx_linha + 1
+            break
+
         if not data["Destino"]:
             dest_match = re.search(r'\b(SOC-[A-Z0-9\-]+|HUB-[A-Z0-9\-]+|LM\s+[A-Z0-9\-]+|LPA[A-Z0-9\-]*|LMA[A-Z0-9\-]*)\b', block)
             if dest_match:
@@ -281,14 +299,33 @@ def process_data_local(text, data_trabalho_str):
         # e a linha depois disso é o total de pacotes. Isso evita depender de uma
         # lista fixa de palavras-chave que não cobre motivos novos (ex.: "Morosidade
         # no carregamento").
+        # --- VALIDAÇÃO / MOTIVO / PACOTES ---
+        # Posicional, âncora na linha de Origem/Destino (idx_dest):
+        #   idx_dest+1 = VALIDAÇÃO (ex.: "5", ou "--\t--" quando não há ocorrência nem pacotes)
+        #   se não for "--": idx_dest+2 = MOTIVO DA OCORRÊNCIA, idx_dest+3 = PACOTES
+        #   se for "--": o próprio idx_dest+1 já traz "--\t<PACOTES ou -->" junto
+        # Isso evita pegar por engano outro número do bloco (km, % de progressão) quando
+        # o campo de pacotes vem como "--" (desconhecido).
+        candidato_pacotes = ""
         if idx_dest is not None and idx_dest + 1 < len(lines):
             linha_contagem = lines[idx_dest + 1]
-            data["Validacao"] = linha_contagem.split('\t')[0]
-            if not linha_contagem.startswith('--') and idx_dest + 2 < len(lines):
-                candidata = lines[idx_dest + 2]
-                candidata_limpa = candidata.replace('.', '').replace(',', '')
-                if not candidata_limpa.isdigit():
-                    data["Motivo_Parada"] = candidata
+            partes_val = linha_contagem.split('\t')
+            data["Validacao"] = partes_val[0]
+            if linha_contagem.startswith('--'):
+                if len(partes_val) > 1:
+                    candidato_pacotes = partes_val[1]
+            else:
+                if idx_dest + 2 < len(lines):
+                    candidata = lines[idx_dest + 2]
+                    candidata_limpa = candidata.replace('.', '').replace(',', '')
+                    if not candidata_limpa.isdigit():
+                        data["Motivo_Parada"] = candidata
+                if idx_dest + 3 < len(lines):
+                    candidato_pacotes = lines[idx_dest + 3]
+
+        candidato_pacotes_limpo = candidato_pacotes.replace('.', '').replace(',', '')
+        if candidato_pacotes_limpo.isdigit():
+            data["Pacotes"] = int(candidato_pacotes_limpo)
 
         # Método de reforço (fallback): lista de palavras-chave conhecidas, caso a
         # posição acima não capture nada (formato de bloco fora do padrão).
@@ -530,7 +567,7 @@ def generate_report_text(df):
         report += "| LT        | Pacotes | Parado | Avaliação |\n"
         report += "| --------- | ------: | -----: | --------------------------------------- |\n"
         for _, row in parados_df.iterrows():
-            report += f"| **{row['LT_Short']}** | {row['Pacotes']:,} | {row['Tempo_Str']} | {row['Status_Operacional']} - {row['Motivo_Parada'] or 'Parado'} |\n"
+            report += f"| **{row['LT_Full']}** | {row['Pacotes']:,} | {row['Tempo_Str']} | {row['Status_Operacional']} - {row['Motivo_Parada'] or 'Parado'} |\n"
         report += "\n---\n\n"
 
     # TOP 5 VOLUMES
@@ -540,7 +577,7 @@ def generate_report_text(df):
     report += "| -: | --------- | ---------------------------- | ---------: | --------------------- |\n"
     for i, (_, row) in enumerate(top5.iterrows(), 1):
         medal = "🥇" if i == 1 else ("🥈" if i == 2 else ("🥉" if i == 3 else str(i)))
-        report += f"| {medal} | **{row['LT_Short']}** | {row['Motorista']} | **{row['Pacotes']:,}** | {row['Status_Operacional']} |\n"
+        report += f"| {medal} | **{row['LT_Full']}** | {row['Motorista']} | **{row['Pacotes']:,}** | {row['Status_Operacional']} |\n"
     report += "\n---\n\n"
 
     # PONTOS DE ATENÇÃO — CONFIRMAR LOCALIZAÇÃO DA BASE (~60km do destino)
@@ -808,9 +845,9 @@ if st.session_state["relatorio_gerado"]:
                 if not impactantes.empty:
                     st.markdown("**🚨 LTs que não vão chegar dentro do ETA / impactaram a performance:**")
                     tabela_impacto = impactantes[
-                        ["LT_Short", "Motorista", "Classificacao_Performance", "Motivo_Parada", "ETA", "Distancia_Raw", "Velocidade"]
+                        ["LT_Full", "Motorista", "Classificacao_Performance", "Motivo_Parada", "ETA", "Distancia_Raw", "Velocidade"]
                     ].rename(columns={
-                        "LT_Short": "LT",
+                        "LT_Full": "LT",
                         "Classificacao_Performance": "Situação",
                         "Motivo_Parada": "Ocorrência",
                         "Distancia_Raw": "Distância (km)"
@@ -831,9 +868,9 @@ if st.session_state["relatorio_gerado"]:
         df_atrasadas = df[df["Status_Operacional"] == "Delay"]
         if not df_atrasadas.empty:
             tabela_atraso = df_atrasadas[
-                ["LT_Short", "Motorista", "UF", "ETA", "Motivo_Parada", "Motivo_Risco", "Pacotes", "Velocidade", "Distancia_Raw"]
+                ["LT_Full", "Motorista", "UF", "ETA", "Motivo_Parada", "Motivo_Risco", "Pacotes", "Velocidade", "Distancia_Raw"]
             ].rename(columns={
-                "LT_Short": "LT",
+                "LT_Full": "LT",
                 "ETA": "ETA Destino",
                 "Motivo_Parada": "Motivo da Ocorrência",
                 "Motivo_Risco": "Detalhe do Atraso",
@@ -848,7 +885,7 @@ if st.session_state["relatorio_gerado"]:
         st.markdown("#### 🛑 Veículos Parados")
         df_parados = df[df["Status_Movimento"] == "Parado"]
         if not df_parados.empty:
-            st.dataframe(df_parados[["LT_Short", "Motorista", "Pacotes", "Tempo_Str", "Destino", "Motivo_Parada"]], use_container_width=True, hide_index=True)
+            st.dataframe(df_parados[["LT_Full", "Motorista", "Pacotes", "Tempo_Str", "Destino", "Motivo_Parada"]], use_container_width=True, hide_index=True)
         else:
             st.success("Nenhum veículo parado.")
 
@@ -857,14 +894,14 @@ if st.session_state["relatorio_gerado"]:
         st.caption("Só LTs ainda em rota — quem já chegou não entra aqui.")
         df_tendencia = df[df["Status_Operacional"] == "Tendência"]
         if not df_tendencia.empty:
-            st.dataframe(df_tendencia[["LT_Short", "Motorista", "Pacotes", "ETA", "Motivo_Risco"]], use_container_width=True, hide_index=True)
+            st.dataframe(df_tendencia[["LT_Full", "Motorista", "Pacotes", "ETA", "Motivo_Risco"]], use_container_width=True, hide_index=True)
         else:
             st.success("Nenhuma tendência de atraso.")
 
     with tab_top10:
         st.markdown("#### 📦 Top Volumes")
-        st.dataframe(df.sort_values(by="Pacotes", ascending=False).head(10)[["LT_Short", "Motorista", "Pacotes", "ETA", "Destino"]], use_container_width=True, hide_index=True)
+        st.dataframe(df.sort_values(by="Pacotes", ascending=False).head(10)[["LT_Full", "Motorista", "Pacotes", "ETA", "Destino"]], use_container_width=True, hide_index=True)
 
     with tab_tabela:
         st.markdown("#### 📊 Tabela Analítica Completa")
-        st.dataframe(df[["LT_Short", "Motorista", "Pacotes", "UF", "Status_Operacional", "Status_Movimento", "Velocidade", "ETA", "Chegada_Real", "Destino"]], use_container_width=True, hide_index=True)
+        st.dataframe(df[["LT_Full", "Motorista", "Pacotes", "UF", "Status_Operacional", "Status_Movimento", "Velocidade", "ETA", "Chegada_Real", "Destino"]], use_container_width=True, hide_index=True)

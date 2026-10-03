@@ -267,6 +267,31 @@ def esta_em_rota(row):
     return pd.isna(row["Chegada_Real_Dt"])
 
 
+def esta_no_range_turno(eta_dt, data_trabalho_str):
+    """Retorna True quando o ETA está no range operacional do turno.
+
+    Range: 19:00 do dia do plantão até 15:00 do dia seguinte.
+    """
+
+    if not eta_dt:
+        return False
+
+    try:
+        dt_base = datetime.strptime(
+            data_trabalho_str,
+            "%d/%m/%Y"
+        )
+    except Exception:
+        return False
+
+    inicio = dt_base.replace(
+        hour=19, minute=0, second=0, microsecond=0
+    )
+    fim = inicio + timedelta(hours=20)
+
+    return inicio <= eta_dt <= fim
+
+
 # ============================================================
 # PROJEÇÃO DA MARGEM
 # ============================================================
@@ -567,6 +592,13 @@ def process_data_local(text, data_trabalho_str):
             "Tempo_Horas": 0.0,
             "Motivo_Parada": "",
             "Ultima_Atualizacao_Str": "",
+            "Marcador_Early": "",
+            "Andamento_Dashboard": "",
+            "Ignicao": "",
+            "Progressao": "",
+            "Proximidade": 0,
+            "Early_Pendente": False,
+            "Em_Range_Turno": False,
             "Sem_Sinal": False,
             "Status_Operacional": "Normal",
             "Classificacao_Desempenho": "No prazo",
@@ -864,33 +896,35 @@ def process_data_local(text, data_trabalho_str):
                     break
 
         # ----------------------------------------------------
-        # DATAS
+        # COLUNAS DO NOVO DASHBOARD
+        #
+        # Ordem nova:
+        # ETA -> REALIZADO -> PRAZO MÁXIMO EARLY ->
+        # MARCADOR EARLY -> ANDAMENTO -> IGNIÇÃO -> VELOCIDADE ->
+        # PROGRESSÃO -> PROXIMIDADE -> ÚLTIMO POSICIONAMENTO
+        #
+        # O prazo máximo para Early é deliberadamente ignorado.
         # ----------------------------------------------------
 
-        date_pattern = r"\d{2}/\d{2} \d{2}:\d{2}"
+        date_pattern = r"^\d{2}/\d{2} \d{2}:\d{2}$"
 
-        dates_found = re.findall(
-            date_pattern,
-            block
-        )
+        # Último posicionamento: último horário isolado do bloco.
+        date_only_lines = [
+            line for line in lines
+            if re.match(date_pattern, line)
+        ]
 
-        if dates_found:
-
-            data["Ultima_Atualizacao_Str"] = (
-                dates_found[-1]
-            )
+        if date_only_lines:
+            data["Ultima_Atualizacao_Str"] = date_only_lines[-1]
 
             try:
-
                 ts_dt = datetime.strptime(
                     f"{data['Ultima_Atualizacao_Str']}/{ano_atual}",
                     "%d/%m %H:%M/%Y"
                 )
 
                 if ts_dt > agora_br + timedelta(days=1):
-                    ts_dt = ts_dt.replace(
-                        year=ano_atual - 1
-                    )
+                    ts_dt = ts_dt.replace(year=ano_atual - 1)
 
                 horas_sem_atualizacao = (
                     agora_br - ts_dt
@@ -905,53 +939,122 @@ def process_data_local(text, data_trabalho_str):
             except Exception:
                 pass
 
-        # ----------------------------------------------------
-        # ETA / CHEGADA REAL
-        # ----------------------------------------------------
+        # Algumas colunas são entregues na mesma linha, separadas por TAB,
+        # por isso não podemos tratar cada linha física como uma coluna.
 
+        # Localiza a linha física que contém o campo Andamento.
+        andamento_line_idx = None
         for i, line in enumerate(lines):
+            tokens_line = [p.strip() for p in line.split("\t") if p.strip()]
+            if any(t in ("No prazo", "Atrasado", "Risco") for t in tokens_line):
+                andamento_line_idx = i
+                break
 
-            if (
-                "No prazo" in line
-                or "Atrasado" in line
-                or "Risco" in line
-            ):
+        # Antes do Andamento ficam ETA, realizado (ou —) e o prazo máximo
+        # de Early. O prazo máximo é deliberadamente ignorado.
+        if andamento_line_idx is not None:
+            datas_antes_andamento = [
+                line for line in lines[:andamento_line_idx]
+                if re.match(date_pattern, line)
+            ]
 
-                # Linha anterior = chegada real
-                if i >= 1:
+            if datas_antes_andamento:
+                data["ETA"] = datas_antes_andamento[0]
 
-                    linha_chegada = lines[i - 1]
+                if len(datas_antes_andamento) >= 3:
+                    data["Chegada_Real"] = datas_antes_andamento[1]
+                else:
+                    data["Chegada_Real"] = "—"
 
-                    if re.match(
-                        date_pattern,
-                        linha_chegada
-                    ):
-                        data["Chegada_Real"] = (
-                            linha_chegada
-                        )
+        field_tokens = []
+        for line in lines:
+            field_tokens.extend(
+                [p.strip() for p in line.split("\t") if p.strip()]
+            )
 
-                    elif linha_chegada in ("-", "—"):
-                        data["Chegada_Real"] = (
-                            linha_chegada
-                        )
+        andamento_idx = None
+        for i, token in enumerate(field_tokens):
+            if token in ("No prazo", "Atrasado", "Risco"):
+                andamento_idx = i
+                data["Andamento_Dashboard"] = token
+                break
 
-                # Duas linhas anteriores = ETA
-                if i >= 2:
+        # MARCADOR DE CONTATO DE EARLY
+        for token in field_tokens:
+            if token.lower() == "marcar contato":
+                data["Marcador_Early"] = "Marcar contato"
+                break
+            if token.lower() == "contatado":
+                data["Marcador_Early"] = "Contatado"
+                break
 
-                    linha_eta = lines[i - 2]
+        # IGNIÇÃO e VELOCIDADE pertencem à linha da coluna Andamento.
+        # Isso evita confundir o "--" da ocorrência/pacotes com a ignição.
+        if andamento_line_idx is not None:
+            andamento_tokens = [
+                p.strip()
+                for p in lines[andamento_line_idx].split("\t")
+                if p.strip()
+            ]
 
-                    if re.match(
-                        date_pattern,
-                        linha_eta
-                    ):
-                        data["ETA"] = linha_eta
+            try:
+                pos_status = next(
+                    i for i, token in enumerate(andamento_tokens)
+                    if token in ("No prazo", "Atrasado", "Risco")
+                )
 
-        # Fallback
-        if (
-            data["ETA"] == "-"
-            and dates_found
-        ):
-            data["ETA"] = dates_found[0]
+                if pos_status + 1 < len(andamento_tokens):
+                    candidato_ignicao = andamento_tokens[pos_status + 1]
+                    if candidato_ignicao in ("Ligada", "Desligada", "--"):
+                        data["Ignicao"] = candidato_ignicao
+
+                for token in andamento_tokens[pos_status + 1:]:
+                    vel_token = re.search(
+                        r"(\d+)\s*km/h",
+                        token,
+                        re.IGNORECASE
+                    )
+                    if vel_token:
+                        data["Velocidade"] = int(vel_token.group(1))
+                        break
+            except StopIteration:
+                pass
+
+        # Fallback de velocidade para blocos incompletos.
+        if data["Velocidade"] == 0:
+            for token in field_tokens:
+                vel_token = re.search(r"(\d+)\s*km/h", token, re.IGNORECASE)
+                if vel_token:
+                    data["Velocidade"] = int(vel_token.group(1))
+                    break
+
+        # PROGRESSÃO
+        for token in field_tokens:
+            if re.match(r"^\d+(?:[.,]\d+)?%$", token):
+                data["Progressao"] = token
+                break
+
+        # PROXIMIDADE
+        for token in field_tokens:
+            prox_match = re.match(r"^(\d+)\s*km$", token, re.IGNORECASE)
+            if prox_match:
+                data["Proximidade"] = int(prox_match.group(1))
+                break
+
+        # A proximidade é a distância oficial para os cálculos.
+        if data["Proximidade"] > 0:
+            data["Distancia_Raw"] = data["Proximidade"]
+
+        # Early pendente só é relevante dentro do range do turno.
+        # A coluna 'prazo máximo para Early' é ignorada.
+        data["Em_Range_Turno"] = esta_no_range_turno(
+            parse_eta_to_datetime(data["ETA"], ano_atual),
+            data_trabalho_str
+        )
+        data["Early_Pendente"] = (
+            data["Em_Range_Turno"]
+            and data["Marcador_Early"].lower() == "marcar contato"
+        )
 
         # ----------------------------------------------------
         # DATETIME
@@ -1164,6 +1267,29 @@ def generate_report_text(df):
     report += "• Parada programada de intervalo/refeição não é aceita como justificativa final de atraso; nesses casos, o relatório pede investigação da razão real.\n\n"
 
     # --------------------------------------------------------
+    # EARLY PENDENTE
+    # --------------------------------------------------------
+    report += "## 📞 EARLY — marcar contato\n\n"
+
+    early_pendente = df[
+        (df["Em_Range_Turno"] == True)
+        & (df["Early_Pendente"] == True)
+        & df["Em_Rota"]
+    ].copy()
+
+    if early_pendente.empty:
+        report += "Todos os veículos do range já foram contatados para Early, ou não há Early pendente neste recorte.\n\n"
+    else:
+        report += "Estas LTs estão no range do turno e ainda aparecem como \"Marcar contato\":\n\n"
+        for _, row in early_pendente.iterrows():
+            report += (
+                f"• {row['LT_Full']} — {row['Motorista']} | "
+                f"ETA: {row['ETA']} | Destino: {row['Destino']} | "
+                f"Distância: {row['Distancia_Raw']} km.\n"
+            )
+        report += "Ação: realizar o contato de Early e registrar o aviso no dashboard.\n\n"
+
+    # --------------------------------------------------------
     # DELAY
     # --------------------------------------------------------
     report += "## 🚨 LTs em Delay\n\n"
@@ -1315,11 +1441,42 @@ def generate_report_text(df):
         riscos_todos.apply(deve_alertar_tendencia, axis=1)
     ].copy()
 
+    # A lista de tendências pode ficar vazia em alguns recortes.
+    # Não acessar colunas diretamente nesse caso evita KeyError e mantém
+    # o Plano de Ação funcionando mesmo sem nenhuma tendência alertável.
+    tendencias_urgentes = tendencias_alertaveis.iloc[0:0].copy()
+
+    if not tendencias_alertaveis.empty:
+        mascara_tendencia_urgente = pd.Series(
+            False,
+            index=tendencias_alertaveis.index
+        )
+
+        if "Margem_Minutos" in tendencias_alertaveis.columns:
+            mascara_tendencia_urgente = (
+                pd.to_numeric(
+                    tendencias_alertaveis["Margem_Minutos"],
+                    errors="coerce"
+                ).fillna(999999) <= 30
+            )
+
+        if "Tempo_Horas" in tendencias_alertaveis.columns:
+            mascara_tendencia_urgente = (
+                mascara_tendencia_urgente |
+                (
+                    pd.to_numeric(
+                        tendencias_alertaveis["Tempo_Horas"],
+                        errors="coerce"
+                    ).fillna(0) >= LIMIAR_PARADO_LONGO_HORAS
+                )
+            )
+
+        tendencias_urgentes = tendencias_alertaveis[
+            mascara_tendencia_urgente
+        ].copy()
+
     urgentes = pd.concat(
-        [delays_alertaveis, sem_sinal_df, tendencias_alertaveis[
-            (tendencias_alertaveis["Margem_Minutos"] <= 30) |
-            (tendencias_alertaveis["Tempo_Horas"] >= LIMIAR_PARADO_LONGO_HORAS)
-        ]],
+        [delays_alertaveis, sem_sinal_df, tendencias_urgentes],
         ignore_index=True
     ).drop_duplicates(subset=["LT_Full"])
 
@@ -1567,6 +1724,14 @@ if st.session_state["relatorio_gerado"]:
     )
 
     total_lts = len(df)
+
+    qtd_early_pendente = len(
+        df[
+            (df["Em_Range_Turno"] == True)
+            & (df["Early_Pendente"] == True)
+            & df.apply(esta_em_rota, axis=1)
+        ]
+    )
 
     qtd_normal = len(
         df[

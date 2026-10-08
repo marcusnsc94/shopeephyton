@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import re
+import logging
 from datetime import datetime, timedelta
 import plotly.express as px
 
@@ -540,7 +541,7 @@ def process_data_local(text, data_trabalho_str):
     )
 
     if not matches:
-        return pd.DataFrame()
+        return garantir_colunas(pd.DataFrame())
 
     blocks = []
 
@@ -1248,20 +1249,102 @@ def process_data_local(text, data_trabalho_str):
             df_result["Chegada_Real_Dt"].isna()
         ].copy()
 
-    return df_result
+    return garantir_colunas(df_result)
 
 
 # ============================================================
 # RELATÓRIO
 # ============================================================
 
-def generate_report_text(df):
+def campo_ausente(valor):
+    """Reconhece marcadores comuns de informação ausente do dashboard."""
+    if valor is None:
+        return True
+    try:
+        if pd.isna(valor):
+            return True
+    except (TypeError, ValueError):
+        pass
+    return str(valor).strip().casefold() in {"", "-", "--", "—", "n/a", "na", "null", "none", "nan"}
+
+
+def valor_seguro(valor, padrao="—"):
+    return padrao if campo_ausente(valor) else valor
+
+
+COLUNAS_SEGURAS = {
+    "LT_Full": "", "LT_Short": "", "Motorista": "Não informado",
+    "Origem": "—", "Destino": "—", "UF": "OUTROS", "Pacotes": 0,
+    "ETA": "—", "Chegada_Real": "—", "Velocidade": None,
+    "Distancia_Raw": None, "Distancia_Corrigida": None,
+    "Fator_Correcao": "", "Status_Movimento": "Desconhecido",
+    "Tempo_Str": "—", "Tempo_Horas": 0.0, "Motivo_Parada": "",
+    "Ultima_Atualizacao_Str": "—", "Marcador_Early": "",
+    "Andamento_Dashboard": "—", "Ignicao": "—", "Progressao": None,
+    "Proximidade": None, "Early_Pendente": False, "Em_Range_Turno": False,
+    "Sem_Sinal": False, "Status_Operacional": "Dados insuficientes",
+    "Classificacao_Desempenho": "Validar dados", "Motivo_Risco": "",
+    "Margem_Minutos": None, "ETA_Dt": None, "Chegada_Real_Dt": None,
+    "Adiantamento_Minutos": None,
+}
+
+
+def garantir_colunas(df):
+    """Garante o esquema esperado sem transformar desconhecido em zero real."""
+    if df is None:
+        df = pd.DataFrame()
+    df = df.copy()
+    for coluna, padrao in COLUNAS_SEGURAS.items():
+        if coluna not in df.columns:
+            df[coluna] = padrao
+    return df
+
+
+def gerar_relatorio_emergencia(df, erro=None):
+    """Última barreira: produz um resumo utilizável se a análise completa falhar."""
+    df = garantir_colunas(df)
+    agora = agora_brasilia().strftime("%d/%m/%Y · %H:%M")
+    linhas = [
+        f"# Monitoramento Operacional — {agora}",
+        "⚠️ RELATÓRIO DE CONTINGÊNCIA: uma etapa da análise completa falhou.",
+        "Os dados abaixo são um resumo básico; valide manualmente as LTs com campos ausentes.",
+        f"Total de LTs recebidas para análise: {len(df)}", "",
+    ]
+    if erro:
+        # Mostra apenas o tipo da falha, sem expor detalhes técnicos ou dados do report.
+        linhas.append(f"Etapa interrompida por inconsistência: {type(erro).__name__}.")
+        linhas.append("")
+    if df.empty:
+        linhas.append("Nenhuma LT válida foi identificada no texto colado.")
+    else:
+        linhas.append("## LTs identificadas")
+        for _, row in df.iterrows():
+            lt = valor_seguro(row.get("LT_Full"), "LT sem código")
+            motorista = valor_seguro(row.get("Motorista"), "Motorista não identificado")
+            destino = valor_seguro(row.get("Destino"), "Destino não identificado")
+            status = valor_seguro(row.get("Status_Operacional"), "Análise indisponível")
+            eta = valor_seguro(row.get("ETA"), "ETA ausente")
+            linhas.append(f"• {lt} — {motorista} | Destino: {destino} | ETA: {eta} | Situação: {status}")
+    linhas += ["", "Ação recomendada: confira os campos ausentes no dashboard e gere novamente o relatório."]
+    return "\n".join(linhas)
+
+
+def _generate_report_text_core(df):
     """Gera o relatório operacional em linguagem direta e organizada."""
 
     agora = agora_brasilia()
     data_hora_str = agora.strftime("%d/%m/%Y · %H:%M")
 
-    df = df.copy()
+    df = garantir_colunas(df)
+
+    # Normaliza valores não numéricos antes dos cálculos; ausência não vira movimento zero.
+    for coluna in ["Pacotes", "Distancia_Raw", "Distancia_Corrigida", "Tempo_Horas", "Margem_Minutos"]:
+        df[coluna] = pd.to_numeric(df[coluna], errors="coerce")
+    df["Pacotes"] = df["Pacotes"].fillna(0)
+    df["Tempo_Horas"] = df["Tempo_Horas"].fillna(0)
+    df["Sem_Sinal"] = df["Sem_Sinal"].fillna(False).astype(bool)
+    df["Em_Range_Turno"] = df["Em_Range_Turno"].fillna(False).astype(bool)
+    df["Early_Pendente"] = df["Early_Pendente"].fillna(False).astype(bool)
 
     df["Em_Rota"] = df.apply(esta_em_rota, axis=1)
     df["Minutos_Ate_ETA"] = df["ETA_Dt"].apply(
@@ -1488,10 +1571,25 @@ def generate_report_text(df):
             mascara_tendencia_urgente
         ].copy()
 
-    urgentes = pd.concat(
-        [delays_alertaveis, sem_sinal_df, tendencias_urgentes],
-        ignore_index=True
-    ).drop_duplicates(subset=["LT_Full"])
+    # Sempre manter as colunas-base, mesmo quando todas as listas estiverem vazias.
+    # Caso contrário, o pandas cria um DataFrame sem colunas e os filtros
+    # seguintes podem gerar KeyError em LT_Full.
+    frames_urgentes = [
+        frame for frame in [
+            delays_alertaveis,
+            sem_sinal_df,
+            tendencias_urgentes
+        ]
+        if frame is not None and not frame.empty
+    ]
+
+    if frames_urgentes:
+        urgentes = pd.concat(
+            frames_urgentes,
+            ignore_index=True
+        ).drop_duplicates(subset=["LT_Full"])
+    else:
+        urgentes = df.iloc[0:0].copy()
 
     report += "### 🔴 Cobrar agora\n\n"
     if urgentes.empty:
@@ -1511,9 +1609,13 @@ def generate_report_text(df):
         report += "\n"
 
     report += "### 🟠 Monitorar nos próximos 30 minutos\n\n"
-    monitorar = tendencias_alertaveis[
-        ~tendencias_alertaveis["LT_Full"].isin(urgentes["LT_Full"])
-    ].copy()
+    if (not tendencias_alertaveis.empty and "LT_Full" in tendencias_alertaveis.columns
+            and "LT_Full" in urgentes.columns):
+        monitorar = tendencias_alertaveis[
+            ~tendencias_alertaveis["LT_Full"].isin(urgentes["LT_Full"])
+        ].copy()
+    else:
+        monitorar = df.iloc[0:0].copy()
     if monitorar.empty:
         report += "Nenhuma LT adicional exige acompanhamento intensivo nos próximos 30 minutos.\n\n"
     else:
@@ -1527,9 +1629,12 @@ def generate_report_text(df):
         (df["Status_Movimento"] == "Parado") &
         (df["Tempo_Horas"] >= 1)
     ].copy()
-    escalar = escalar[
-        ~escalar["LT_Full"].isin(urgentes["LT_Full"])
-    ]
+    if "LT_Full" in escalar.columns and "LT_Full" in urgentes.columns:
+        escalar = escalar[
+            ~escalar["LT_Full"].isin(urgentes["LT_Full"])
+        ].copy()
+    else:
+        escalar = df.iloc[0:0].copy()
     if escalar.empty:
         report += "Nenhuma unidade adicional está nesta condição.\n\n"
     else:
@@ -1593,6 +1698,22 @@ def generate_report_text(df):
             report += f"{row['LT_Full']}\n"
 
     return report
+
+
+def generate_report_text(df):
+    """Gera o relatório completo e usa contingência se surgir erro inesperado."""
+    df_seguro = garantir_colunas(df)
+    try:
+        return _generate_report_text_core(df_seguro)
+    except Exception as erro:
+        # Registra a falha nos logs do servidor sem exibir traceback técnico ao operador.
+        logging.exception("Falha ao gerar relatório analítico; usando contingência.")
+        st.warning(
+            "Uma inconsistência nos dados impediu parte da análise. "
+            "Foi gerado um relatório de contingência com as LTs identificadas. "
+            "Confira os campos ausentes e tente novamente."
+        )
+        return gerar_relatorio_emergencia(df_seguro, erro)
 
 
 # ============================================================

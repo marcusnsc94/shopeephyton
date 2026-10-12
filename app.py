@@ -32,6 +32,15 @@ MINUTOS_PROXIMO_ETA_PORTARIA = 60
 # Correção da distância
 FATOR_CORRECAO_GERAL = 1.25
 FATOR_CORRECAO_MA = 1.35
+FATOR_CORRECAO_BA = 1.50
+
+def fator_correcao_uf(uf):
+    """Regra de conversão de KM: MA +35%, BA +50%, demais UFs +25%."""
+    if uf == "MA":
+        return FATOR_CORRECAO_MA
+    if uf == "BA":
+        return FATOR_CORRECAO_BA
+    return FATOR_CORRECAO_GERAL
 
 # Velocidade de referência operacional
 VELOCIDADE_REFERENCIA_KMH = 60
@@ -329,11 +338,7 @@ def calcular_margem_projetada(row, horizonte_min):
         0
     )
 
-    fator = (
-        FATOR_CORRECAO_MA
-        if row["UF"] == "MA"
-        else FATOR_CORRECAO_GERAL
-    )
+    fator = fator_correcao_uf(row["UF"])
 
     distancia_restante_corrigida = distancia_restante_raw * fator
 
@@ -1091,23 +1096,9 @@ def process_data_local(text, data_trabalho_str):
         # CORREÇÃO DE DISTÂNCIA
         # ----------------------------------------------------
 
-        if data["UF"] == "MA":
-
-            data["Distancia_Corrigida"] = (
-                data["Distancia_Raw"]
-                * FATOR_CORRECAO_MA
-            )
-
-            data["Fator_Correcao"] = "(MA +35%)"
-
-        else:
-
-            data["Distancia_Corrigida"] = (
-                data["Distancia_Raw"]
-                * FATOR_CORRECAO_GERAL
-            )
-
-            data["Fator_Correcao"] = "(geral +25%)"
+        fator_uf = fator_correcao_uf(data["UF"])
+        data["Distancia_Corrigida"] = data["Distancia_Raw"] * fator_uf
+        data["Fator_Correcao"] = f"(+{round((fator_uf - 1) * 100)}%)"
 
         # ----------------------------------------------------
         # STATUS OPERACIONAL
@@ -1445,7 +1436,7 @@ def _generate_report_text_core(df):
     hub_xpt_df = df[
         df["Em_Rota"] &
         df["ETA_Dt"].notna() &
-        (df["Distancia_Raw"] > 0) &
+        (df["Distancia_Corrigida"] > 0) &
         df["Destino"].apply(destino_eh_hub_xpt) &
         (df["Margem_Minutos"] < MINUTOS_ANTECEDENCIA_HUB_XPT)
     ].copy()
@@ -1508,7 +1499,7 @@ def _generate_report_text_core(df):
     report += "## 📍 LTs próximas do destino / base\n\n"
     proximos_base = df[
         df["Em_Rota"] &
-        (df["Distancia_Raw"] <= KM_ALERTA_LOCALIZACAO_BASE + TOLERANCIA_KM_LOCALIZACAO_BASE)
+        (df["Distancia_Corrigida"] <= KM_ALERTA_LOCALIZACAO_BASE + TOLERANCIA_KM_LOCALIZACAO_BASE)
     ].copy()
 
     if proximos_base.empty:
@@ -1659,8 +1650,8 @@ def _generate_report_text_core(df):
     portaria_df = df[
         df["Em_Rota"] &
         df["UF"].isin(["SP", "RJ"]) &
-        (df["Distancia_Raw"] >= KM_ALERTA_PORTARIA_SP_RJ - TOLERANCIA_KM_PORTARIA) &
-        (df["Distancia_Raw"] <= KM_ALERTA_PORTARIA_SP_RJ + TOLERANCIA_KM_PORTARIA) &
+        (df["Distancia_Corrigida"] >= KM_ALERTA_PORTARIA_SP_RJ - TOLERANCIA_KM_PORTARIA) &
+        (df["Distancia_Corrigida"] <= KM_ALERTA_PORTARIA_SP_RJ + TOLERANCIA_KM_PORTARIA) &
         df["Minutos_Ate_ETA"].notnull() &
         (df["Minutos_Ate_ETA"] <= MINUTOS_PROXIMO_ETA_PORTARIA)
     ].copy()
@@ -1969,7 +1960,7 @@ if st.session_state["relatorio_gerado"]:
     ) = st.tabs(
         [
             "📋 Relatório Formatado",
-            "🌐 Performance por Rota (UF)",
+            "🌐 Performance dos veículos ativos (UF)",
             "🔴 LTs Atrasadas",
             "🛑 Veículos Parados",
             "⚠️ Tendência de Atraso",
@@ -2003,7 +1994,7 @@ if st.session_state["relatorio_gerado"]:
     with tab_performance:
 
         st.markdown(
-            "#### 🌐 Performance por Rota (UF)"
+            "#### 🌐 Performance dos veículos ativos (UF)"
         )
 
         st.info(
@@ -2263,6 +2254,7 @@ if st.session_state["relatorio_gerado"]:
                         [
                             "LT_Full",
                             "Motorista",
+                            "Pacotes",
                             "Classificacao_Performance",
                             "Motivo_Parada",
                             "ETA",
@@ -2272,6 +2264,7 @@ if st.session_state["relatorio_gerado"]:
                     ].rename(
                         columns={
                             "LT_Full": "LT",
+                            "Pacotes": "Pacotes",
                             "Classificacao_Performance": "Situação",
                             "Motivo_Parada": "Ocorrência",
                             "Distancia_Raw": "Distância (km)"
@@ -2373,7 +2366,11 @@ if st.session_state["relatorio_gerado"]:
 
         df_parados = df[
             df["Status_Movimento"] == "Parado"
-        ]
+        ].copy()
+
+        df_parados["Motivo_Parada"] = df_parados["Motivo_Parada"].replace(
+            "", pd.NA
+        ).fillna("VERIFICAR MOTIVO DA PAUSA")
 
         if not df_parados.empty:
 
@@ -2389,7 +2386,9 @@ if st.session_state["relatorio_gerado"]:
                     ]
                 ].rename(
                     columns={
-                        "LT_Full": "LT"
+                        "LT_Full": "LT",
+                        "Tempo_Str": "Tempo parado",
+                        "Motivo_Parada": "Última ocorrência"
                     }
                 ),
                 use_container_width=True,

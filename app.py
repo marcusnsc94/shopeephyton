@@ -2066,7 +2066,17 @@ if st.session_state["relatorio_gerado"]:
             unsafe_allow_html=True
         )
 
-        st.markdown(st.session_state["relatorio_gerado"])
+        # O resumo final é exibido à parte, em bloco de código, para manter
+        # uma LT por linha (o markdown normal junta as linhas em um parágrafo).
+        texto_rel = st.session_state["relatorio_gerado"]
+        if "## Resumo simplificado" in texto_rel:
+            antes_resumo, depois_resumo = texto_rel.split("## Resumo simplificado", 1)
+            resumo_puro = depois_resumo.replace("```text", "").replace("```", "").strip("\n")
+            st.markdown(antes_resumo)
+            st.markdown("## Resumo simplificado")
+            st.code(resumo_puro, language=None)
+        else:
+            st.markdown(texto_rel)
 
         st.markdown("<br>", unsafe_allow_html=True)
 

@@ -1372,7 +1372,7 @@ def _generate_report_text_core(df):
             report += (
                 f"• {row['LT_Full']} — {row['Motorista']} | "
                 f"ETA: {row['ETA']} | Destino: {row['Destino']} | "
-                f"Distância: {row['Distancia_Raw']} km.\n"
+                f"Distância: {row['Distancia_Corrigida']:.0f} km (original: {row['Distancia_Raw']} km).\n"
             )
         report += "Ação: realizar o contato de Early e registrar o aviso no dashboard.\n\n"
 
@@ -1391,7 +1391,7 @@ def _generate_report_text_core(df):
     else:
         for _, row in criticos.iterrows():
             report += f"### 🔴 {row['LT_Full']} — {row['Motorista']}\n"
-            report += f"ETA: {row['ETA']} | Pacotes: {row['Pacotes']:,} | Distância: {row['Distancia_Raw']} km\n"
+            report += f"ETA: {row['ETA']} | Pacotes: {row['Pacotes']:,} | Distância: {row['Distancia_Corrigida']:.0f} km (original: {row['Distancia_Raw']} km)\n"
             report += f"Velocidade atual: {row['Velocidade']} km/h.\n"
 
             if row["Status_Movimento"] == "Parado":
@@ -1421,7 +1421,7 @@ def _generate_report_text_core(df):
     else:
         for _, row in riscos.iterrows():
             report += f"### 🟠 {row['LT_Full']} — {row['Motorista']}\n"
-            report += f"ETA: {row['ETA']} | Pacotes: {row['Pacotes']:,} | Distância: {row['Distancia_Raw']} km\n"
+            report += f"ETA: {row['ETA']} | Pacotes: {row['Pacotes']:,} | Distância: {row['Distancia_Corrigida']:.0f} km (original: {row['Distancia_Raw']} km)\n"
             report += f"{row['Motivo_Risco']}\n"
             if row["Motivo_Parada"]:
                 report += f"Ocorrência registrada: {motivo_para_exibicao(row['Motivo_Parada'])}.\n"
@@ -1507,7 +1507,7 @@ def _generate_report_text_core(df):
     else:
         for _, row in proximos_base.iterrows():
             endereco = BASE_ENDERECOS.get(row["Destino"])
-            texto = f"• {row['LT_Full']} — {row['Motorista']} | {row['Distancia_Raw']} km do destino {row['Destino']}."
+            texto = f"• {row['LT_Full']} — {row['Motorista']} | {row['Distancia_Corrigida']:.0f} km (original: {row['Distancia_Raw']} km) do destino {row['Destino']}."
             if endereco:
                 texto += f" Local da base: {endereco}."
             else:
@@ -1660,7 +1660,7 @@ def _generate_report_text_core(df):
         report += "Nenhuma LT está neste intervalo neste recorte.\n\n"
     else:
         for _, row in portaria_df.iterrows():
-            report += f"• {row['LT_Full']} — {row['Motorista']} | {row['Distancia_Raw']} km do destino | ETA em aproximadamente {int(row['Minutos_Ate_ETA'])} min.\n"
+            report += f"• {row['LT_Full']} — {row['Motorista']} | {row['Distancia_Corrigida']:.0f} km (original: {row['Distancia_Raw']} km) do destino | ETA em aproximadamente {int(row['Minutos_Ate_ETA'])} min.\n"
         report += "\n"
 
     # --------------------------------------------------------
@@ -2258,7 +2258,7 @@ if st.session_state["relatorio_gerado"]:
                             "Classificacao_Performance",
                             "Motivo_Parada",
                             "ETA",
-                            "Distancia_Raw",
+                            "Distancia_Corrigida",
                             "Velocidade"
                         ]
                     ].rename(
@@ -2267,7 +2267,7 @@ if st.session_state["relatorio_gerado"]:
                             "Pacotes": "Pacotes",
                             "Classificacao_Performance": "Situação",
                             "Motivo_Parada": "Ocorrência",
-                            "Distancia_Raw": "Distância (km)"
+                            "Distancia_Corrigida": "Distância corrigida (km)"
                         }
                     )
 
@@ -2323,7 +2323,7 @@ if st.session_state["relatorio_gerado"]:
                     "Motivo_Risco",
                     "Pacotes",
                     "Velocidade",
-                    "Distancia_Raw"
+                    "Distancia_Corrigida"
                 ]
             ].rename(
                 columns={
@@ -2331,7 +2331,7 @@ if st.session_state["relatorio_gerado"]:
                     "ETA": "ETA Destino",
                     "Motivo_Parada": "Motivo da Ocorrência",
                     "Motivo_Risco": "Detalhe do Atraso",
-                    "Distancia_Raw": "Distância (km)"
+                    "Distancia_Corrigida": "Distância corrigida (km)"
                 }
             )
 

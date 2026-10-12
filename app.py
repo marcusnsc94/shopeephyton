@@ -2497,6 +2497,11 @@ if st.session_state["relatorio_gerado"]:
                 }
             )
 
+            # Distância no formato "392.5 km" (um decimal + unidade)
+            tabela_atraso["Distância corrigida (km)"] = tabela_atraso[
+                "Distância corrigida (km)"
+            ].apply(lambda km: f"{km:.1f} km")
+
             tabela_atraso[
                 "Motivo da Ocorrência"
             ] = tabela_atraso[

@@ -1544,7 +1544,7 @@ def _generate_report_text_core(df):
     # HUB / XPT
     # --------------------------------------------------------
     report += "## 🏭 Atenção para HUB / XPT\n\n"
-    report += f"Para destinos com HUB ou XPT no nome, a referência é chegar com pelo menos {MINUTOS_ANTECEDENCIA_HUB_XPT} minutos de antecedência em relação ao ETA.\n\n"
+    report += "Para destinos com HUB ou XPT no nome, a referência é o veículo ficar na rua da base com pelo menos 20 minutos de antecedência em relação ao early, pois são locais difíceis de transitar, podendo gerar delays.\n\n"
 
     hub_xpt_df = df[
         df["Em_Rota"] &
@@ -2432,6 +2432,13 @@ if st.session_state["relatorio_gerado"]:
                             "Distancia_Corrigida": "Distância corrigida (km)"
                         }
                     )
+
+                    # Distância no formato "392.5 km" (um decimal + unidade)
+                    tabela_impacto[
+                        "Distância corrigida (km)"
+                    ] = tabela_impacto[
+                        "Distância corrigida (km)"
+                    ].apply(lambda km: f"{km:.1f} km")
 
                     tabela_impacto[
                         "Ocorrência"

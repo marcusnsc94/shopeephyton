@@ -1658,7 +1658,7 @@ def _generate_report_text_core(df):
     if urgentes.empty:
         report += "Nenhuma unidade exige cobrança imediata.\n\n"
     else:
-        for _, row in urgentes.iterrows():
+        for numero, (_, row) in enumerate(urgentes.iterrows(), 1):
             detalhes = []
             if row["Sem_Sinal"]:
                 detalhes.append(f"sem sinal desde {row['Ultima_Atualizacao_Str']}")
@@ -1668,8 +1668,10 @@ def _generate_report_text_core(df):
                 detalhes.append(row["Motivo_Risco"] or "margem apertada na projeção de 60 minutos")
             if row["Motivo_Parada"]:
                 detalhes.append(f"ocorrência: {motivo_para_exibicao(row['Motivo_Parada'])}")
-            report += f"• {row['LT_Full']} — {row['Motorista']}: " + "; ".join(detalhes) + ".\n"
-        report += "\n"
+            report += (
+                f"**{numero}. {row['LT_Full']} — {row['Motorista']}**\n\n"
+                + "; ".join(detalhes) + ".\n\n"
+            )
 
     report += "### 🟠 Monitorar nos próximos 30 minutos\n\n"
     if (not tendencias_alertaveis.empty and "LT_Full" in tendencias_alertaveis.columns
@@ -2069,6 +2071,9 @@ if st.session_state["relatorio_gerado"]:
         # O resumo final é exibido à parte, em bloco de código, para manter
         # uma LT por linha (o markdown normal junta as linhas em um parágrafo).
         texto_rel = st.session_state["relatorio_gerado"]
+        # Cada linha que começa com "•" vira item de lista markdown ("- "),
+        # para o Streamlit exibir uma LT por linha (sem juntar tudo num parágrafo).
+        texto_rel = re.sub(r"(?m)^• ", "- ", texto_rel)
         if "## Resumo simplificado" in texto_rel:
             antes_resumo, depois_resumo = texto_rel.split("## Resumo simplificado", 1)
             resumo_puro = depois_resumo.replace("```text", "").replace("```", "").strip("\n")

@@ -1733,7 +1733,7 @@ st.markdown("<br>", unsafe_allow_html=True)
 # ============================================================
 
 st.markdown(
-    "### 📅 Configuração do Turno"
+    "### 📅 Configuração da Turma da madrugada"
 )
 
 col_s1, col_s2 = st.columns([3, 7])
@@ -1746,7 +1746,7 @@ with col_s1:
     )
 
     data_plantao_str = st.text_input(
-        "Data de Início do Plantão / Turno D (DD/MM/AAAA):",
+        "Data de Início do Plantão / Turma da madrugada (DD/MM/AAAA):",
         value=data_hoje_str,
         placeholder="Ex: 30/09/2026"
     )
@@ -1999,7 +1999,7 @@ if st.session_state["relatorio_gerado"]:
 
         st.info(
             f"Exibindo LTs ainda em rota com ETA dentro do "
-            f"turno: **19:00 de {data_plantao_str} até "
+            f"turma da madrugada: **19:00 de {data_plantao_str} até "
             f"15:00 do dia seguinte**."
         )
 
@@ -2081,7 +2081,7 @@ if st.session_state["relatorio_gerado"]:
             )
 
             st.markdown(
-                "##### 📊 Resumo do Turno"
+                "##### 📊 Resumo da Turma da madrugada"
             )
 
             r1, r2, r3, r4 = st.columns(4)
@@ -2293,7 +2293,7 @@ if st.session_state["relatorio_gerado"]:
 
             st.warning(
                 "Nenhuma LT em rota dentro "
-                "do range do Turno D."
+                "do range da Turma da madrugada."
             )
 
 

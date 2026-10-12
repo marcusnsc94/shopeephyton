@@ -243,6 +243,33 @@ def parse_duration(time_str):
     return "0h00", 0.0
 
 
+def formatar_margem_dhm(minutos_totais):
+    """Margem em dias/horas/minutos: '01d 08h 05m', '05h 10m', '00h 30m'."""
+    if pd.isna(minutos_totais):
+        return "—"
+    minutos_totais = int(minutos_totais)
+    sinal = "-" if minutos_totais < 0 else ""
+    dias, resto = divmod(abs(minutos_totais), 24 * 60)
+    horas, minutos = divmod(resto, 60)
+    if dias > 0:
+        return f"{sinal}{dias:02d}d {horas:02d}h {minutos:02d}m"
+    return f"{sinal}{horas:02d}h {minutos:02d}m"
+
+def mostrar_tabela(dados, use_container_width=True, hide_index=True):
+    """Exibe tabela com o conteúdo das colunas centralizado."""
+    estilo = (
+        dados.style
+        .set_properties(**{"text-align": "center"})
+        .set_table_styles([
+            {"selector": "th", "props": [("text-align", "center")]}
+        ])
+    )
+    st.dataframe(
+        estilo,
+        use_container_width=use_container_width,
+        hide_index=hide_index
+    )
+
 def formatar_deficit_tempo(minutos_totais):
     minutos_totais = int(abs(minutos_totais))
 
@@ -2418,7 +2445,7 @@ if st.session_state["relatorio_gerado"]:
                         )
                     )
 
-                    st.dataframe(
+                    mostrar_tabela(
                         tabela_impacto,
                         use_container_width=True,
                         hide_index=True
@@ -2476,7 +2503,7 @@ if st.session_state["relatorio_gerado"]:
                 "Motivo da Ocorrência"
             ].apply(motivo_para_exibicao)
 
-            st.dataframe(
+            mostrar_tabela(
                 tabela_atraso,
                 use_container_width=True,
                 hide_index=True
@@ -2509,7 +2536,7 @@ if st.session_state["relatorio_gerado"]:
 
         if not df_parados.empty:
 
-            st.dataframe(
+            mostrar_tabela(
                 df_parados[
                     [
                         "LT_Full",
@@ -2560,19 +2587,25 @@ if st.session_state["relatorio_gerado"]:
 
         if not df_tendencia.empty:
 
-            st.dataframe(
+            df_tendencia = df_tendencia.assign(
+                Margem_Formatada=df_tendencia["Margem_Minutos"].apply(formatar_margem_dhm)
+            )
+
+            mostrar_tabela(
                 df_tendencia[
                     [
                         "LT_Full",
                         "Motorista",
                         "Pacotes",
                         "ETA",
-                        "Margem_Minutos",
+                        "Margem_Formatada",
                         "Motivo_Risco"
                     ]
                 ].rename(
                     columns={
-                        "LT_Full": "LT"
+                        "LT_Full": "LT",
+                        "Margem_Formatada": "Margem de tempo",
+                        "Motivo_Risco": "Motivo do Risco"
                     }
                 ),
                 use_container_width=True,
@@ -2596,7 +2629,7 @@ if st.session_state["relatorio_gerado"]:
             "#### 📦 Top Volumes"
         )
 
-        st.dataframe(
+        mostrar_tabela(
             df.sort_values(
                 by="Pacotes",
                 ascending=False
@@ -2628,7 +2661,7 @@ if st.session_state["relatorio_gerado"]:
             "#### 📊 Tabela Analítica Completa"
         )
 
-        st.dataframe(
+        mostrar_tabela(
             df[
                 [
                     "LT_Full",

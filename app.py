@@ -2207,17 +2207,32 @@ if st.session_state["relatorio_gerado"]:
 
                 with col_uf2:
 
+                    df_uf_grafico = df_uf.assign(
+                        Legenda=df_uf["Classificacao_Performance"].map({
+                            "No prazo": "Veículos no prazo",
+                            "Delay": "Veículos atrasados",
+                            "Early": "Veículos early"
+                        })
+                    )
+
                     fig_uf = px.pie(
-                        df_uf,
-                        names="Classificacao_Performance",
+                        df_uf_grafico,
+                        names="Legenda",
                         title=f"Distribuição — {uf}",
-                        color="Classificacao_Performance",
+                        color="Legenda",
                         color_discrete_map={
-                            "No prazo": "#10b981",
-                            "Delay": "#dc2626",
-                            "Early": "#3b82f6"
+                            "Veículos no prazo": "#10b981",
+                            "Veículos atrasados": "#dc2626",
+                            "Veículos early": "#3b82f6"
                         },
                         hole=0.4
+                    )
+
+                    # Números ao lado das fatias (verde e vermelha) e texto ao passar o mouse
+                    fig_uf.update_traces(
+                        textinfo="value",
+                        textposition="outside",
+                        hovertemplate="%{label}: %{value}<extra></extra>"
                     )
 
                     fig_uf.update_layout(

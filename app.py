@@ -1739,6 +1739,7 @@ def _generate_report_text_core(df):
     # RESUMO
     # --------------------------------------------------------
     report += "## Resumo simplificado\n\n"
+    report += "```text\n"
     report += "Delay:\n"
     if criticos.empty:
         report += "Nenhuma LT.\n"
@@ -1759,6 +1760,7 @@ def _generate_report_text_core(df):
     else:
         for _, row in sem_sinal_df.iterrows():
             report += f"{row['LT_Full']}\n"
+    report += "```\n"
 
     return report
 

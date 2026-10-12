@@ -130,6 +130,78 @@ st.markdown(
         color: #1e293b;
         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
     }
+    /* ===== RELATÓRIO FORMATADO — visual profissional ===== */
+    .rel-banner {
+        background: linear-gradient(135deg, #1e293b 0%, #334155 100%);
+        color: #ffffff;
+        border-radius: 14px;
+        padding: 22px 28px;
+        margin-bottom: 28px;
+        box-shadow: 0 6px 18px rgba(15, 23, 42, 0.18);
+    }
+    .rel-banner .rel-titulo {
+        font-size: 22px;
+        font-weight: 700;
+        letter-spacing: 0.3px;
+    }
+    .rel-banner .rel-sub {
+        font-size: 13px;
+        opacity: 0.85;
+        margin-top: 6px;
+    }
+    [data-testid="stMarkdownContainer"] h1 {
+        font-size: 22px;
+        color: #0f172a;
+        border-bottom: 3px solid #ee4d2d;
+        padding-bottom: 8px;
+        margin-top: 34px;
+        margin-bottom: 18px;
+    }
+    [data-testid="stMarkdownContainer"] h2 {
+        font-size: 17px;
+        color: #1e293b;
+        background: #ffffff;
+        border: 1px solid #e2e8f0;
+        border-left: 5px solid #ee4d2d;
+        border-radius: 10px;
+        padding: 12px 16px;
+        margin-top: 18px;
+        margin-bottom: 10px;
+    }
+    [data-testid="stMarkdownContainer"] hr {
+        margin: 34px 0;
+        border: none;
+        border-top: 1px dashed #cbd5e1;
+    }
+    [data-testid="stMarkdownContainer"] blockquote {
+        background: #fff7ed;
+        border-left: 4px solid #f59e0b;
+        border-radius: 8px;
+        padding: 10px 16px;
+        color: #7c2d12;
+        margin: 14px 0;
+    }
+    [data-testid="stMarkdownContainer"] table {
+        border-collapse: separate;
+        border-spacing: 0;
+        width: 100%;
+        border: 1px solid #e2e8f0;
+        border-radius: 10px;
+        overflow: hidden;
+        margin: 12px 0 24px 0;
+    }
+    [data-testid="stMarkdownContainer"] th {
+        background: #f1f5f9;
+        color: #334155;
+        font-size: 13px;
+        text-transform: uppercase;
+        letter-spacing: 0.4px;
+        padding: 10px 12px;
+    }
+    [data-testid="stMarkdownContainer"] td {
+        padding: 9px 12px;
+        border-top: 1px solid #f1f5f9;
+    }
     </style>
     """,
     unsafe_allow_html=True
@@ -1976,15 +2048,32 @@ if st.session_state["relatorio_gerado"]:
 
     with tab_relatorio:
 
+        agora_rel = datetime.utcnow() - timedelta(hours=3)
+
         st.markdown(
-            "#### 📋 Pré-visualização do Relatório"
+            f"""
+            <div class="rel-banner">
+                <div class="rel-titulo">📋 Monitoramento Operacional</div>
+                <div class="rel-sub">
+                    Gerado em {agora_rel.strftime("%d/%m/%Y às %H:%M")}
+                    &nbsp;•&nbsp; Turma da madrugada: {data_plantao_str}
+                    &nbsp;•&nbsp; {len(df)} LTs no recorte
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True
         )
 
-        st.text_area(
-            "Texto formatado completo:",
-            value=st.session_state["relatorio_gerado"],
-            height=600
-        )
+        st.markdown(st.session_state["relatorio_gerado"])
+
+        st.markdown("<br>", unsafe_allow_html=True)
+
+        with st.expander("📄 Copiar texto puro do relatório"):
+            st.text_area(
+                "Texto do relatório:",
+                value=st.session_state["relatorio_gerado"],
+                height=400
+            )
 
 
     # ========================================================

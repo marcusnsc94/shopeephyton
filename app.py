@@ -168,6 +168,20 @@ st.markdown(
         margin-top: 18px;
         margin-bottom: 10px;
     }
+    [data-testid="stMarkdownContainer"] h4 {
+        font-size: 15px;
+        font-weight: 700;
+        color: #1e293b;
+        margin-top: 22px;
+        margin-bottom: 0px;
+        line-height: 1.35;
+    }
+    [data-testid="stMarkdownContainer"] h4 + p {
+        margin-top: 2px;
+        font-size: 14px;
+        color: #475569;
+        line-height: 1.5;
+    }
     [data-testid="stMarkdownContainer"] hr {
         margin: 34px 0;
         border: none;
@@ -1462,7 +1476,7 @@ def _generate_report_text_core(df):
         report += "Nenhuma LT está em Delay neste recorte.\n\n"
     else:
         for _, row in criticos.iterrows():
-            report += f"### 🔴 {row['LT_Full']} — {row['Motorista']}\n"
+            report += f"#### 🔴 {row['LT_Full']} — {row['Motorista']}\n"
             report += f"ETA: {row['ETA']} | Pacotes: {row['Pacotes']:,} | Distância: {row['Distancia_Corrigida']:.0f} km (original: {row['Distancia_Raw']} km)\n"
             report += f"Velocidade atual: {row['Velocidade']} km/h.\n"
 
@@ -1492,7 +1506,7 @@ def _generate_report_text_core(df):
         report += "Nenhuma LT apresenta tendência de atraso relevante neste recorte.\n\n"
     else:
         for _, row in riscos.iterrows():
-            report += f"### 🟠 {row['LT_Full']} — {row['Motorista']}\n"
+            report += f"#### 🟠 {row['LT_Full']} — {row['Motorista']}\n"
             report += f"ETA: {row['ETA']} | Pacotes: {row['Pacotes']:,} | Distância: {row['Distancia_Corrigida']:.0f} km (original: {row['Distancia_Raw']} km)\n"
             report += f"{row['Motivo_Risco']}\n"
             if row["Motivo_Parada"]:
@@ -1788,7 +1802,7 @@ def generate_report_text(df):
 # ============================================================
 
 st.markdown(
-    "<h1 style='text-align: center; color: #ee4d2d;'>"
+    "<h1 style='text-align: center; color: #ee4d2d; font-size: 44px; font-weight: 800; margin-bottom: 0.2em;'>"
     "🚛 Torre de Controle — Gestão Inteligente de Frotas"
     "</h1>",
     unsafe_allow_html=True

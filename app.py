@@ -5,10 +5,7 @@ import logging
 from datetime import datetime, timedelta
 import plotly.express as px
 
-
-# ============================================================
 # CONFIGURAÇÃO DA PÁGINA
-# ============================================================
 
 st.set_page_config(
     page_title="Torre de Controle — Shopee",
@@ -17,10 +14,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-
-# ============================================================
 # PARÂMETROS OPERACIONAIS
-# ============================================================
 
 KM_ALERTA_LOCALIZACAO_BASE = 60
 TOLERANCIA_KM_LOCALIZACAO_BASE = 10
@@ -43,11 +37,9 @@ def fator_correcao_uf(uf):
     return FATOR_CORRECAO_GERAL
 
 # Velocidade de referência operacional
-VELOCIDADE_REFERENCIA_KMH = 60
 
 # Tendência
 HORIZONTE_TENDENCIA_MIN = 60
-HORIZONTE_TENDENCIA_CURTO_MIN = 30
 
 # Parada considerada longa para alerta operacional
 LIMIAR_PARADO_LONGO_HORAS = 2.0
@@ -65,10 +57,7 @@ BASE_ENDERECOS = {
     # "SOC-PE2": "Rua Exemplo, 123 - Cabo de Santo Agostinho/PE",
 }
 
-
-# ============================================================
 # CSS
-# ============================================================
 
 st.markdown(
     """
@@ -221,14 +210,10 @@ st.markdown(
     unsafe_allow_html=True
 )
 
-
-# ============================================================
 # FUNÇÕES AUXILIARES
-# ============================================================
 
 def agora_brasilia():
     return datetime.utcnow() - timedelta(hours=3)
-
 
 def parse_duration(time_str):
     try:
@@ -241,7 +226,6 @@ def parse_duration(time_str):
         pass
 
     return "0h00", 0.0
-
 
 def formatar_margem_dhm(minutos_totais):
     """Margem em dias/horas/minutos: '01d 08h 05m', '05h 10m', '00h 30m'."""
@@ -281,7 +265,6 @@ def formatar_deficit_tempo(minutos_totais):
 
     return f"Déficit de {horas:02d}h {minutos:02d}min."
 
-
 def parse_eta_to_datetime(eta_str, ano_atual):
     try:
         if not eta_str or eta_str in ("-", "—"):
@@ -294,7 +277,6 @@ def parse_eta_to_datetime(eta_str, ano_atual):
 
     except Exception:
         return None
-
 
 def extract_uf(destino):
     """
@@ -346,7 +328,6 @@ def extract_uf(destino):
 
     return "OUTROS"
 
-
 def destino_eh_hub_xpt(destino):
     """
     Detecta HUB ou XPT em qualquer parte do nome do destino.
@@ -366,29 +347,14 @@ def destino_eh_hub_xpt(destino):
         or "XPT_" in texto
     )
 
-
 def motivo_eh_neutro(motivo):
     if not motivo:
         return True
 
     return str(motivo).strip() in OCORRENCIAS_NEUTRAS
 
-
-def ocorrencia_explicada(motivo):
-    """
-    Verdadeiro quando existe uma ocorrência diferente da parada
-    programada de intervalo/refeição.
-    """
-
-    if not motivo:
-        return False
-
-    return not motivo_eh_neutro(motivo)
-
-
 def esta_em_rota(row):
     return pd.isna(row["Chegada_Real_Dt"])
-
 
 def esta_no_range_turno(eta_dt, data_trabalho_str):
     """Retorna True quando o ETA está no range operacional do turno.
@@ -414,10 +380,7 @@ def esta_no_range_turno(eta_dt, data_trabalho_str):
 
     return inicio <= eta_dt <= fim
 
-
-# ============================================================
 # PROJEÇÃO DA MARGEM
-# ============================================================
 
 def calcular_margem_projetada(row, horizonte_min):
     """
@@ -467,7 +430,6 @@ def calcular_margem_projetada(row, horizonte_min):
     )
 
     return margem_projetada
-
 
 def avaliar_tendencia(data):
     """
@@ -520,25 +482,22 @@ def avaliar_tendencia(data):
         f"[TENDÊNCIA {nivel}] " + " | ".join(detalhes) + "."
     )
 
+def motivo_para_exibicao(motivo, status=None):
+    """Texto do motivo para relatório, tabelas e alertas.
 
-def motivo_para_exibicao(motivo):
-    """Texto usado nas áreas de atraso/relatório.
-
-    A parada programada de intervalo/refeição não é apresentada como
-    justificativa final de atraso: ela passa a exigir investigação da causa.
+    "PROCURAR RAZÃO DO ATRASO" aparece SOMENTE quando o veículo está em
+    Delay detectado E a ocorrência é "Parada programada — intervalo/refeição".
+    Em qualquer outro caso mostra o motivo real (ou "—" se estiver vazio).
     """
 
     motivo = str(motivo or "").strip()
 
-    if motivo_eh_neutro(motivo):
+    if status == "Delay" and motivo in OCORRENCIAS_NEUTRAS:
         return "PROCURAR RAZÃO DO ATRASO"
 
     return motivo or "—"
 
-
-# ============================================================
 # FILTRO DE ALERTA
-# ============================================================
 
 def deve_alertar_tendencia(row):
     """
@@ -580,10 +539,7 @@ def deve_alertar_tendencia(row):
 
     return perto_da_base or parado_muito_tempo
 
-
-# ============================================================
 # CLASSIFICAÇÃO DE PERFORMANCE
-# ============================================================
 
 def classificar_performance(row):
 
@@ -596,7 +552,6 @@ def classificar_performance(row):
         return "Early"
 
     return "No prazo"
-
 
 def calcular_performance_rota(df_uf):
 
@@ -616,10 +571,7 @@ def calcular_performance_rota(df_uf):
 
     return performance_pct, ganho
 
-
-# ============================================================
 # PROCESSAMENTO DOS DADOS
-# ============================================================
 
 def process_data_local(text, data_trabalho_str):
 
@@ -644,12 +596,10 @@ def process_data_local(text, data_trabalho_str):
     except Exception:
         ano_atual = agora_br.year
 
-    # --------------------------------------------------------
     # NOVO PARSER DE BLOCOS
     #
     # Procura cada LT diretamente no começo de uma linha.
     # Isso é mais resistente ao conteúdo copiado do dashboard.
-    # --------------------------------------------------------
 
     matches = list(
         re.finditer(
@@ -674,9 +624,7 @@ def process_data_local(text, data_trabalho_str):
 
         blocks.append(text[inicio:fim].strip())
 
-    # --------------------------------------------------------
     # PROCESSA CADA LT
-    # --------------------------------------------------------
 
     for block in blocks:
 
@@ -728,9 +676,7 @@ def process_data_local(text, data_trabalho_str):
             "Adiantamento_Minutos": None
         }
 
-        # ----------------------------------------------------
         # LT + MOTORISTA
-        # ----------------------------------------------------
 
         first_line = lines[0].split("\t")
 
@@ -740,9 +686,7 @@ def process_data_local(text, data_trabalho_str):
         if len(first_line) > 1:
             data["Motorista"] = first_line[1].strip()
 
-        # ----------------------------------------------------
         # MOVIMENTO
-        # ----------------------------------------------------
 
         block_lower = block.lower()
 
@@ -752,9 +696,7 @@ def process_data_local(text, data_trabalho_str):
         elif "parado há" in block_lower:
             data["Status_Movimento"] = "Parado"
 
-        # ----------------------------------------------------
         # TEMPO PARADO / EM TRÂNSITO
-        # ----------------------------------------------------
 
         time_match = re.search(
             r"(\d{2}:\d{2}:\d{2})",
@@ -767,9 +709,7 @@ def process_data_local(text, data_trabalho_str):
                 data["Tempo_Horas"]
             ) = parse_duration(time_match.group(1))
 
-        # ----------------------------------------------------
         # VELOCIDADE
-        # ----------------------------------------------------
 
         vel_match = re.search(
             r"(\d+)\s*km/h",
@@ -782,9 +722,7 @@ def process_data_local(text, data_trabalho_str):
                 vel_match.group(1)
             )
 
-        # ----------------------------------------------------
         # DISTÂNCIA
-        # ----------------------------------------------------
 
         dist_matches = re.findall(
             r"(?m)^(\d+)\s*km$",
@@ -797,14 +735,12 @@ def process_data_local(text, data_trabalho_str):
                 dist_matches[-1]
             )
 
-        # ----------------------------------------------------
         # ORIGEM / DESTINO
         #
         # Aceita:
         # SOC-BA2 -> SOC-GO1
         # FMH-3PL-17 -> SoC_RJ_Queimados
         # SOC-GO1 -> LM Hub_MA_FX_São Luís_01
-        # ----------------------------------------------------
 
         idx_dest = None
 
@@ -846,9 +782,7 @@ def process_data_local(text, data_trabalho_str):
                 idx_dest = idx_linha
                 break
 
-        # ----------------------------------------------------
         # FALLBACK PARA DESTINO
-        # ----------------------------------------------------
 
         if not data["Destino"]:
 
@@ -878,7 +812,6 @@ def process_data_local(text, data_trabalho_str):
             data["Destino"]
         )
 
-        # ----------------------------------------------------
         # OCORRÊNCIA
         #
         # Estrutura normal:
@@ -889,7 +822,6 @@ def process_data_local(text, data_trabalho_str):
         # 8265
         #
         # Portanto, o número 4 NÃO é pacote.
-        # ----------------------------------------------------
 
         if idx_dest is not None:
 
@@ -955,9 +887,7 @@ def process_data_local(text, data_trabalho_str):
                                 pacote_candidato
                             )
 
-        # ----------------------------------------------------
         # FALLBACK DE PACOTES
-        # ----------------------------------------------------
 
         if data["Pacotes"] == 0:
 
@@ -984,9 +914,7 @@ def process_data_local(text, data_trabalho_str):
             if candidatos_pacotes:
                 data["Pacotes"] = candidatos_pacotes[0]
 
-        # ----------------------------------------------------
         # FALLBACK DE OCORRÊNCIA
-        # ----------------------------------------------------
 
         if not data["Motivo_Parada"]:
 
@@ -1014,7 +942,6 @@ def process_data_local(text, data_trabalho_str):
                     data["Motivo_Parada"] = line
                     break
 
-        # ----------------------------------------------------
         # COLUNAS DO NOVO DASHBOARD
         #
         # Ordem nova:
@@ -1023,7 +950,6 @@ def process_data_local(text, data_trabalho_str):
         # PROGRESSÃO -> PROXIMIDADE -> ÚLTIMO POSICIONAMENTO
         #
         # O prazo máximo para Early é deliberadamente ignorado.
-        # ----------------------------------------------------
 
         date_pattern = r"^\d{2}/\d{2} \d{2}:\d{2}$"
 
@@ -1175,9 +1101,7 @@ def process_data_local(text, data_trabalho_str):
             and data["Marcador_Early"].lower() == "marcar contato"
         )
 
-        # ----------------------------------------------------
         # DATETIME
-        # ----------------------------------------------------
 
         data["ETA_Dt"] = parse_eta_to_datetime(
             data["ETA"],
@@ -1189,9 +1113,7 @@ def process_data_local(text, data_trabalho_str):
             ano_atual
         )
 
-        # ----------------------------------------------------
         # ADIANTAMENTO
-        # ----------------------------------------------------
 
         if (
             data["ETA_Dt"]
@@ -1205,17 +1127,13 @@ def process_data_local(text, data_trabalho_str):
                 ).total_seconds() / 60
             )
 
-        # ----------------------------------------------------
         # CORREÇÃO DE DISTÂNCIA
-        # ----------------------------------------------------
 
         fator_uf = fator_correcao_uf(data["UF"])
         data["Distancia_Corrigida"] = data["Distancia_Raw"] * fator_uf
         data["Fator_Correcao"] = f"(+{round((fator_uf - 1) * 100)}%)"
 
-        # ----------------------------------------------------
         # STATUS OPERACIONAL
-        # ----------------------------------------------------
 
         ja_chegou = (
             data["Chegada_Real_Dt"] is not None
@@ -1262,13 +1180,11 @@ def process_data_local(text, data_trabalho_str):
             and data["Distancia_Raw"] > 0
         ):
 
-            # =================================================
             # REGRA MATEMÁTICA OFICIAL
             #
             # tempo disponível = ETA - agora
             # tempo necessário = distância corrigida / 60
             # margem = disponível - necessário
-            # =================================================
 
             tempo_disp_min = (
                 eta_dt - agora_br
@@ -1283,11 +1199,9 @@ def process_data_local(text, data_trabalho_str):
                 - tempo_necessario_min
             )
 
-            # =================================================
             # DELAY
             #
             # ETA passou OU margem <= 0
-            # =================================================
 
             if (
                 tempo_disp_min <= 0
@@ -1305,9 +1219,7 @@ def process_data_local(text, data_trabalho_str):
 
             else:
 
-                # =============================================
                 # TENDÊNCIA
-                # =============================================
 
                 (
                     tem_tendencia,
@@ -1340,14 +1252,12 @@ def process_data_local(text, data_trabalho_str):
 
     df_result = pd.DataFrame(parsed_data)
 
-    # ========================================================
     # CORTE OPERACIONAL: IGNORAR LTs JÁ CHEGADAS
     #
     # Se o campo REALIZADO estiver preenchido, a LT já deu
     # chegada no app e não deve participar de nenhuma análise.
     # Ela é removida aqui, antes de relatório, performance,
     # score cards, tendências, delays e demais abas.
-    # ========================================================
     if not df_result.empty and "Chegada_Real_Dt" in df_result.columns:
         df_result = df_result[
             df_result["Chegada_Real_Dt"].isna()
@@ -1355,10 +1265,7 @@ def process_data_local(text, data_trabalho_str):
 
     return garantir_colunas(df_result)
 
-
-# ============================================================
 # RELATÓRIO
-# ============================================================
 
 def campo_ausente(valor):
     """Reconhece marcadores comuns de informação ausente do dashboard."""
@@ -1371,10 +1278,8 @@ def campo_ausente(valor):
         pass
     return str(valor).strip().casefold() in {"", "-", "--", "—", "n/a", "na", "null", "none", "nan"}
 
-
 def valor_seguro(valor, padrao="—"):
     return padrao if campo_ausente(valor) else valor
-
 
 COLUNAS_SEGURAS = {
     "LT_Full": "", "LT_Short": "", "Motorista": "Não informado",
@@ -1392,7 +1297,6 @@ COLUNAS_SEGURAS = {
     "Adiantamento_Minutos": None,
 }
 
-
 def garantir_colunas(df):
     """Garante o esquema esperado sem transformar desconhecido em zero real."""
     if df is None:
@@ -1402,7 +1306,6 @@ def garantir_colunas(df):
         if coluna not in df.columns:
             df[coluna] = padrao
     return df
-
 
 def gerar_relatorio_emergencia(df, erro=None):
     """Última barreira: produz um resumo utilizável se a análise completa falhar."""
@@ -1431,7 +1334,6 @@ def gerar_relatorio_emergencia(df, erro=None):
             linhas.append(f"• {lt} — {motorista} | Destino: {destino} | ETA: {eta} | Situação: {status}")
     linhas += ["", "Ação recomendada: confira os campos ausentes no dashboard e gere novamente o relatório."]
     return "\n".join(linhas)
-
 
 def _generate_report_text_core(df):
     """Gera o relatório operacional em linguagem direta e organizada."""
@@ -1466,9 +1368,7 @@ def _generate_report_text_core(df):
     report += "• Tendência: somente quando a projeção de 60 minutos deixa a margem em até 30 minutos ou negativa.\n"
     report += "• Parada programada de intervalo/refeição não é aceita como justificativa final de atraso; nesses casos, o relatório pede investigação da razão real.\n\n"
 
-    # --------------------------------------------------------
     # EARLY PENDENTE
-    # --------------------------------------------------------
     report += "## 📞 EARLY — marcar contato\n\n"
 
     early_pendente = df[
@@ -1489,9 +1389,7 @@ def _generate_report_text_core(df):
             )
         report += "Ação: realizar o contato de Early e registrar o aviso no dashboard.\n\n"
 
-    # --------------------------------------------------------
     # DELAY
-    # --------------------------------------------------------
     report += "## 🚨 LTs em Delay\n\n"
 
     criticos = df[
@@ -1511,13 +1409,11 @@ def _generate_report_text_core(df):
                 report += f"Está parado há {row['Tempo_Str']}.\n"
 
             if row["Motivo_Parada"]:
-                report += f"Ocorrência: {motivo_para_exibicao(row['Motivo_Parada'])}.\n"
+                report += f"Ocorrência: {motivo_para_exibicao(row['Motivo_Parada'], row['Status_Operacional'])}.\n"
 
             report += f"Situação matemática: {row['Motivo_Risco']}\n\n"
 
-    # --------------------------------------------------------
     # TENDÊNCIA
-    # --------------------------------------------------------
     report += "## ⚠️ Tendência de atraso\n\n"
 
     riscos_todos = df[
@@ -1537,12 +1433,10 @@ def _generate_report_text_core(df):
             report += f"ETA: {row['ETA']} | Pacotes: {row['Pacotes']:,} | Distância: {row['Distancia_Corrigida']:.0f} km (original: {row['Distancia_Raw']} km)\n"
             report += f"{row['Motivo_Risco']}\n"
             if row["Motivo_Parada"]:
-                report += f"Ocorrência registrada: {motivo_para_exibicao(row['Motivo_Parada'])}.\n"
+                report += f"Ocorrência registrada: {motivo_para_exibicao(row['Motivo_Parada'], row['Status_Operacional'])}.\n"
             report += "Ação: acompanhar a evolução da margem na próxima atualização.\n\n"
 
-    # --------------------------------------------------------
     # HUB / XPT
-    # --------------------------------------------------------
     report += "## 🏭 Atenção para HUB / XPT\n\n"
     report += "Para destinos com HUB ou XPT no nome, a referência é o veículo ficar na rua da base com pelo menos 20 minutos de antecedência em relação ao early, pois são locais difíceis de transitar, podendo gerar delays.\n\n"
 
@@ -1566,9 +1460,7 @@ def _generate_report_text_core(df):
             report += f"• {row['LT_Full']} — {row['Motorista']} | Destino: {row['Destino']} | {situacao}.\n"
         report += "\n"
 
-    # --------------------------------------------------------
     # SEM SINAL
-    # --------------------------------------------------------
     report += "## 🚨 Sem sinal\n\n"
     sem_sinal_df = df[df["Sem_Sinal"] == True].copy()
 
@@ -1579,9 +1471,7 @@ def _generate_report_text_core(df):
             report += f"• {row['LT_Full']} — {row['Motorista']} | última atualização: {row['Ultima_Atualizacao_Str']}.\n"
         report += "Ação: localizar o veículo e restabelecer a comunicação.\n\n"
 
-    # --------------------------------------------------------
     # PARADOS
-    # --------------------------------------------------------
     report += "## 🛑 Veículos parados\n\n"
     parados_df = df[df["Status_Movimento"] == "Parado"].sort_values(
         by="Tempo_Horas", ascending=False
@@ -1592,13 +1482,11 @@ def _generate_report_text_core(df):
     else:
         report += "| LT | Pacotes | Tempo parado | Situação |\n| --- | ---: | ---: | --- |\n"
         for _, row in parados_df.iterrows():
-            motivo = motivo_para_exibicao(row["Motivo_Parada"]) if row["Motivo_Parada"] else "Parado"
+            motivo = motivo_para_exibicao(row["Motivo_Parada"], row["Status_Operacional"]) if row["Motivo_Parada"] else "Parado"
             report += f"| {row['LT_Full']} | {row['Pacotes']:,} | {row['Tempo_Str']} | {row['Status_Operacional']} — {motivo} |\n"
         report += "\n"
 
-    # --------------------------------------------------------
     # TOP 5
-    # --------------------------------------------------------
     report += "## 📦 Top 5 em volume de pacotes\n\n"
     top5 = df.sort_values(by="Pacotes", ascending=False).head(5)
     report += "| # | LT | Motorista | Pacotes | Situação |\n| -: | --- | --- | ---: | --- |\n"
@@ -1606,9 +1494,7 @@ def _generate_report_text_core(df):
         report += f"| {i} | {row['LT_Full']} | {row['Motorista']} | {row['Pacotes']:,} | {row['Status_Operacional']} |\n"
     report += "\n"
 
-    # --------------------------------------------------------
     # PONTOS PRÓXIMOS DA BASE
-    # --------------------------------------------------------
     report += "## 📍 LTs próximas do destino / base\n\n"
     proximos_base = df[
         df["Em_Rota"] &
@@ -1628,9 +1514,7 @@ def _generate_report_text_core(df):
             report += texto + "\n"
         report += "\n"
 
-    # --------------------------------------------------------
     # PLANO DE AÇÃO
-    # --------------------------------------------------------
     report += "## 🎯 Plano de ação imediato\n\n"
 
     delays_alertaveis = criticos[
@@ -1708,7 +1592,7 @@ def _generate_report_text_core(df):
             else:
                 detalhes.append(row["Motivo_Risco"] or "margem apertada na projeção de 60 minutos")
             if row["Motivo_Parada"]:
-                detalhes.append(f"ocorrência: {motivo_para_exibicao(row['Motivo_Parada'])}")
+                detalhes.append(f"ocorrência: {motivo_para_exibicao(row['Motivo_Parada'], row['Status_Operacional'])}")
             report += (
                 f"**{numero}. {row['LT_Full']} — {row['Motorista']}**\n\n"
                 + "; ".join(detalhes) + ".\n\n"
@@ -1756,9 +1640,7 @@ def _generate_report_text_core(df):
     ]
     report += f"{len(normais)} LT(s) estão em condição normal no momento.\n\n"
 
-    # --------------------------------------------------------
     # PORTARIA SP/RJ
-    # --------------------------------------------------------
     report += "### 🚪 Solicitar liberação de portaria — SP/RJ\n\n"
     report += "Acionar somente quando o veículo estiver próximo do destino e realmente precisar da liberação.\n\n"
 
@@ -1778,9 +1660,7 @@ def _generate_report_text_core(df):
             report += f"• {row['LT_Full']} — {row['Motorista']} | {row['Distancia_Corrigida']:.0f} km (original: {row['Distancia_Raw']} km) do destino | ETA em aproximadamente {int(row['Minutos_Ate_ETA'])} min.\n"
         report += "\n"
 
-    # --------------------------------------------------------
     # RESUMO
-    # --------------------------------------------------------
     report += "## Resumo simplificado\n\n"
     report += "```text\n"
     report += "Delay:\n"
@@ -1807,7 +1687,6 @@ def _generate_report_text_core(df):
 
     return report
 
-
 def generate_report_text(df):
     """Gera o relatório completo e usa contingência se surgir erro inesperado."""
     df_seguro = garantir_colunas(df)
@@ -1823,10 +1702,7 @@ def generate_report_text(df):
         )
         return gerar_relatorio_emergencia(df_seguro, erro)
 
-
-# ============================================================
 # INTERFACE
-# ============================================================
 
 st.markdown(
     "<h1 style='text-align: center; color: #ee4d2d; font-size: 44px; font-weight: 800; margin-bottom: 0.2em;'>"
@@ -1844,10 +1720,7 @@ st.markdown(
 
 st.markdown("<br>", unsafe_allow_html=True)
 
-
-# ============================================================
 # DATA DO PLANTÃO
-# ============================================================
 
 st.markdown(
     "### 📅 Configuração da Turma da madrugada"
@@ -1868,10 +1741,7 @@ with col_s1:
         placeholder="Ex: 30/09/2026"
     )
 
-
-# ============================================================
 # SESSION STATE
-# ============================================================
 
 if "relatorio_gerado" not in st.session_state:
     st.session_state["relatorio_gerado"] = ""
@@ -1879,10 +1749,7 @@ if "relatorio_gerado" not in st.session_state:
 if "df_parsed" not in st.session_state:
     st.session_state["df_parsed"] = None
 
-
-# ============================================================
 # ENTRADA
-# ============================================================
 
 with st.container():
 
@@ -1904,10 +1771,7 @@ with st.container():
             "Gerar Relatório Analítico"
         )
 
-
-# ============================================================
 # GERAÇÃO
-# ============================================================
 
 if gerar_btn:
 
@@ -1950,10 +1814,7 @@ if gerar_btn:
             "⚠️ Insira os dados na caixa de texto acima antes de gerar."
         )
 
-
-# ============================================================
 # DASHBOARD RESULTADO
-# ============================================================
 
 if st.session_state["relatorio_gerado"]:
 
@@ -2061,10 +1922,7 @@ if st.session_state["relatorio_gerado"]:
 
     st.markdown("<br><br>", unsafe_allow_html=True)
 
-
-    # ========================================================
     # ABAS
-    # ========================================================
 
     (
         tab_relatorio,
@@ -2086,10 +1944,7 @@ if st.session_state["relatorio_gerado"]:
         ]
     )
 
-
-    # ========================================================
     # RELATÓRIO
-    # ========================================================
 
     with tab_relatorio:
 
@@ -2133,10 +1988,7 @@ if st.session_state["relatorio_gerado"]:
                 height=400
             )
 
-
-    # ========================================================
     # PERFORMANCE
-    # ========================================================
 
     with tab_performance:
 
@@ -2193,7 +2045,6 @@ if st.session_state["relatorio_gerado"]:
             )
 
             df_perf = df.iloc[0:0].copy()
-
 
         if not df_perf.empty:
 
@@ -2465,10 +2316,7 @@ if st.session_state["relatorio_gerado"]:
                 "do range da Turma da madrugada."
             )
 
-
-    # ========================================================
     # ATRASADAS
-    # ========================================================
 
     with tab_atrasadas:
 
@@ -2513,7 +2361,7 @@ if st.session_state["relatorio_gerado"]:
                 "Motivo da Ocorrência"
             ] = tabela_atraso[
                 "Motivo da Ocorrência"
-            ].apply(motivo_para_exibicao)
+            ].apply(lambda m: motivo_para_exibicao(m, "Delay"))
 
             mostrar_tabela(
                 tabela_atraso,
@@ -2527,10 +2375,7 @@ if st.session_state["relatorio_gerado"]:
                 "Nenhuma LT atrasada neste recorte."
             )
 
-
-    # ========================================================
     # PARADOS
-    # ========================================================
 
     with tab_parados:
 
@@ -2575,10 +2420,7 @@ if st.session_state["relatorio_gerado"]:
                 "Nenhum veículo parado."
             )
 
-
-    # ========================================================
     # TENDÊNCIA
-    # ========================================================
 
     with tab_tendencia:
 
@@ -2630,10 +2472,7 @@ if st.session_state["relatorio_gerado"]:
                 "Nenhuma tendência de atraso."
             )
 
-
-    # ========================================================
     # TOP 10
-    # ========================================================
 
     with tab_top10:
 
@@ -2662,10 +2501,7 @@ if st.session_state["relatorio_gerado"]:
             hide_index=True
         )
 
-
-    # ========================================================
     # TABELA COMPLETA
-    # ========================================================
 
     with tab_tabela:
 

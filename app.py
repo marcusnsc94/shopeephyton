@@ -1758,7 +1758,7 @@ with st.container():
     )
 
     raw_text = st.text_area(
-        "Cole abaixo o texto extraído do Losung Web:",
+        "Cole abaixo o texto extraído do Losung Web:  \n(Losung Web deve estar no modo **visualização simplificada**):",
         height=300,
         placeholder="Cole o resumo completo do dashboard aqui."
     )

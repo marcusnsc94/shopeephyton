@@ -356,28 +356,30 @@ def motivo_eh_neutro(motivo):
 def esta_em_rota(row):
     return pd.isna(row["Chegada_Real_Dt"])
 
-def esta_no_range_turno(eta_dt, data_trabalho_str):
-    """Retorna True quando o ETA está no range operacional do turno.
+INICIO_TURNO_H = {1: 7, 2: 15, 3: 23}
 
-    Range: 19:00 do dia do plantão até 15:00 do dia seguinte.
+def intervalo_turno(data_trabalho_str, turno):
+    """Range de ETA do turno: começa no início do turno e vai até
+    o fim do turno + 8 horas.
+      Turno 1 (07h-15h): 07:00 até 23:00 do mesmo dia
+      Turno 2 (15h-23h): 15:00 até 07:00 do dia seguinte
+      Turno 3 (23h-07h): 23:00 até 15:00 do dia seguinte
     """
+    dt_base = datetime.strptime(data_trabalho_str, "%d/%m/%Y")
+    inicio = dt_base.replace(
+        hour=INICIO_TURNO_H[turno], minute=0, second=0, microsecond=0
+    )
+    fim = inicio + timedelta(hours=16)
+    return inicio, fim
 
+def esta_no_range_turno(eta_dt, data_trabalho_str, turno=1):
+    """Retorna True quando o ETA está no range operacional do turno."""
     if not eta_dt:
         return False
-
     try:
-        dt_base = datetime.strptime(
-            data_trabalho_str,
-            "%d/%m/%Y"
-        )
+        inicio, fim = intervalo_turno(data_trabalho_str, turno)
     except Exception:
         return False
-
-    inicio = dt_base.replace(
-        hour=19, minute=0, second=0, microsecond=0
-    )
-    fim = inicio + timedelta(hours=20)
-
     return inicio <= eta_dt <= fim
 
 # PROJEÇÃO DA MARGEM
@@ -573,7 +575,7 @@ def calcular_performance_rota(df_uf):
 
 # PROCESSAMENTO DOS DADOS
 
-def process_data_local(text, data_trabalho_str):
+def process_data_local(text, data_trabalho_str, turno=1):
 
     # Normalização do texto colado
     text = str(text).replace("\r\n", "\n").replace("\r", "\n").strip()
@@ -1094,7 +1096,8 @@ def process_data_local(text, data_trabalho_str):
         # A coluna 'prazo máximo para Early' é ignorada.
         data["Em_Range_Turno"] = esta_no_range_turno(
             parse_eta_to_datetime(data["ETA"], ano_atual),
-            data_trabalho_str
+            data_trabalho_str,
+            turno
         )
         data["Early_Pendente"] = (
             data["Em_Range_Turno"]
@@ -1729,7 +1732,7 @@ st.markdown("<br>", unsafe_allow_html=True)
 # DATA DO PLANTÃO
 
 st.markdown(
-    "### 📅 Configuração da Turma da madrugada"
+    "### 📅 Configuração do turno"
 )
 
 col_s1, col_s2 = st.columns([3, 7])
@@ -1742,10 +1745,20 @@ with col_s1:
     )
 
     data_plantao_str = st.text_input(
-        "Data de Início do Plantão / Turma da madrugada (DD/MM/AAAA):",
+        "Data de início do turno (DD/MM/AAAA):",
         value=data_hoje_str,
         placeholder="Ex: 30/09/2026"
     )
+
+with col_s2:
+
+    turno_escolhido = st.radio(
+        "Qual seu turno?",
+        ["Turno 1", "Turno 2", "Turno 3"],
+        horizontal=True
+    )
+
+turno_num = int(turno_escolhido[-1])
 
 # SESSION STATE
 
@@ -1785,7 +1798,8 @@ if gerar_btn:
 
         df_parsed = process_data_local(
             raw_text,
-            data_plantao_str
+            data_plantao_str,
+            turno_num
         )
 
         if df_parsed.empty:
@@ -1962,7 +1976,7 @@ if st.session_state["relatorio_gerado"]:
                 <div class="rel-titulo">📋 Monitoramento Operacional</div>
                 <div class="rel-sub">
                     Gerado em {agora_rel.strftime("%d/%m/%Y às %H:%M")}
-                    &nbsp;•&nbsp; Turma da madrugada: {data_plantao_str}
+                    &nbsp;•&nbsp; {turno_escolhido}: {data_plantao_str}
                     &nbsp;•&nbsp; {len(df)} LTs no recorte
                 </div>
             </div>
@@ -2004,8 +2018,8 @@ if st.session_state["relatorio_gerado"]:
 
         st.info(
             f"Exibindo LTs ainda em rota com ETA dentro do "
-            f"turma da madrugada: **19:00 de {data_plantao_str} até "
-            f"15:00 do dia seguinte**."
+            f"{turno_escolhido}: **{intervalo_turno(data_plantao_str, turno_num)[0]:%d/%m %H:%M} "
+            f"até {intervalo_turno(data_plantao_str, turno_num)[1]:%d/%m %H:%M}**."
         )
 
         try:
@@ -2015,16 +2029,8 @@ if st.session_state["relatorio_gerado"]:
                 "%d/%m/%Y"
             )
 
-            inicio_turno = dt_base.replace(
-                hour=19,
-                minute=0,
-                second=0,
-                microsecond=0
-            )
-
-            fim_turno = (
-                inicio_turno
-                + timedelta(hours=20)
+            inicio_turno, fim_turno = intervalo_turno(
+                data_plantao_str, turno_num
             )
 
             df_perf = df[
@@ -2085,7 +2091,7 @@ if st.session_state["relatorio_gerado"]:
             )
 
             st.markdown(
-                "##### 📊 Resumo da Turma da madrugada"
+                f"##### 📊 Resumo do {turno_escolhido}"
             )
 
             r1, r2, r3, r4 = st.columns(4)
@@ -2319,7 +2325,7 @@ if st.session_state["relatorio_gerado"]:
 
             st.warning(
                 "Nenhuma LT em rota dentro "
-                "do range da Turma da madrugada."
+                f"do range do {turno_escolhido}."
             )
 
     # ATRASADAS

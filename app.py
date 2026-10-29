@@ -1650,6 +1650,46 @@ def _generate_report_text_core(df):
     report += f"{len(normais)} LT(s) estão em condição normal no momento.\n\n"
 
     # PORTARIA SP/RJ
+    # AÇÕES COMPLEMENTARES DO PLANO
+    # 1) Parados há mais de 2 horas sem justificativa (sem ocorrência ou só parada de refeição)
+    parados_sem_justificativa = df[
+        df["Em_Rota"]
+        & (df["Status_Movimento"] == "Parado")
+        & (df["Tempo_Horas"] > 2.0)
+        & df["Motivo_Parada"].apply(
+            lambda m: (not str(m).strip()) or str(m).strip() in OCORRENCIAS_NEUTRAS
+        )
+    ]
+    report += "### ⏱️ Parados há mais de 2 horas sem justificativa\n\n"
+    if parados_sem_justificativa.empty:
+        report += "Nenhum veículo nessa condição.\n\n"
+    else:
+        for _, row in parados_sem_justificativa.iterrows():
+            ocorrencia = str(row["Motivo_Parada"]).strip() or "sem ocorrência registrada"
+            report += f"- **{row['LT_Full']}** — {row['Motorista']}: parado há **{row['Tempo_Str']}** ({ocorrencia})\n"
+        report += "\n"
+
+    # 2) Early ainda não avisado ao condutor (dentro do range do turno)
+    early_sem_aviso = df[
+        df["Em_Rota"] & (df["Early_Pendente"] == True)
+    ]
+    report += "### 📢 Early ainda não avisado ao condutor\n\n"
+    if early_sem_aviso.empty:
+        report += "Todos os early do turno já foram avisados.\n\n"
+    else:
+        for _, row in early_sem_aviso.iterrows():
+            report += f"- **{row['LT_Full']}** — {row['Motorista']}: ETA {row['ETA']}\n"
+        report += "\n"
+
+    # 3) HUB / XPT sem orientação de chegada
+    report += "### 🏭 HUB / XPT sem orientação de chegada\n\n"
+    if hub_xpt_df.empty:
+        report += "Nenhum veículo nessa condição.\n\n"
+    else:
+        for _, row in hub_xpt_df.iterrows():
+            report += f"- **{row['LT_Full']}** — {row['Motorista']}: destino {row['Destino']}, orientar sobre a chegada na base\n"
+        report += "\n"
+
     report += "### 🚪 Solicitar liberação de portaria — SP/RJ\n\n"
     report += "Acionar somente quando o veículo estiver próximo do destino e realmente precisar da liberação.\n\n"
 

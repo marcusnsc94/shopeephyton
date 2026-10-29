@@ -1652,12 +1652,18 @@ def _generate_report_text_core(df):
     # PORTARIA SP/RJ
     # AÇÕES COMPLEMENTARES DO PLANO
     # 1) Parados há mais de 2 horas sem justificativa (sem ocorrência ou só parada de refeição)
+    # Independe do range do turno: cobra a qualquer horário.
+    # Exceção: veículo a menos de 100 km do destino e no prazo (sem Delay) não entra.
     parados_sem_justificativa = df[
         df["Em_Rota"]
         & (df["Status_Movimento"] == "Parado")
         & (df["Tempo_Horas"] > 2.0)
         & df["Motivo_Parada"].apply(
             lambda m: (not str(m).strip()) or str(m).strip() in OCORRENCIAS_NEUTRAS
+        )
+        & ~(
+            (df["Distancia_Corrigida"] < 100)
+            & (df["Status_Operacional"] != "Delay")
         )
     ]
     report += "### ⏱️ Parados há mais de 2 horas sem justificativa\n\n"

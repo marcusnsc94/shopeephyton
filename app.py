@@ -1964,6 +1964,23 @@ if st.session_state["relatorio_gerado"]:
             unsafe_allow_html=True
         )
 
+        # Alerta: veículos em rota já parados há mais de 2 horas
+        parados_2h = df[
+            (df["Status_Movimento"] == "Parado")
+            & (df["Tempo_Horas"] > 2.0)
+            & df.apply(esta_em_rota, axis=1)
+        ].sort_values(by="Tempo_Horas", ascending=False)
+
+        if not parados_2h.empty:
+            linhas_parados = "\n".join(
+                f"- **{row['LT_Full']}** — {row['Motorista']}: parado há **{row['Tempo_Str']}**"
+                for _, row in parados_2h.iterrows()
+            )
+            st.error(
+                f"🛑 **Veículos parados há mais de 2 horas ({len(parados_2h)})**\n\n"
+                + linhas_parados
+            )
+
         # O resumo final é exibido à parte, em bloco de código, para manter
         # uma LT por linha (o markdown normal junta as linhas em um parágrafo).
         texto_rel = st.session_state["relatorio_gerado"]
